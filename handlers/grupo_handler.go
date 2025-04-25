@@ -6,18 +6,11 @@ import (
 	"log"
 	"net/http"
 	"strconv"
-	"time"
 
 	"github.com/GoogleCloudPlatform/golang-samples/run/helloworld/models"
 	"github.com/GoogleCloudPlatform/golang-samples/run/helloworld/repository"
 	"github.com/gorilla/mux"
 )
-
-// Struct to represent group details with associated investigators for response
-type GrupoDetail struct {
-	models.Grupo
-	Investigadores []models.Investigador `json:"investigadores"`
-}
 
 // GetGruposHandler handles fetching all groups or searching based on criteria.
 func GetGruposHandler(db *sql.DB) http.HandlerFunc {
@@ -105,13 +98,13 @@ func UpdateGrupoHandler(db *sql.DB) http.HandlerFunc {
 		id, err := strconv.Atoi(idStr)
 		if err != nil {
 			http.Error(w, "Invalid group ID", http.StatusBadRequest)
-			return	
+			return
 		}
 
 		var g models.Grupo
 		if err := json.NewDecoder(r.Body).Decode(&g); err != nil {
 			http.Error(w, "Invalid request body", http.StatusBadRequest)
-			return	
+			return
 		}
 
 		// Ensure the ID in the body matches the ID in the URL
@@ -120,7 +113,7 @@ func UpdateGrupoHandler(db *sql.DB) http.HandlerFunc {
 		if err := repository.UpdateGrupo(db, &g); err != nil {
 			log.Printf("Error updating group: %v", err)
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
-			return	
+			return
 		}
 
 		w.Header().Set("Content-Type", "application/json")
@@ -137,13 +130,13 @@ func DeleteGrupoHandler(db *sql.DB) http.HandlerFunc {
 		id, err := strconv.Atoi(idStr)
 		if err != nil {
 			http.Error(w, "Invalid group ID", http.StatusBadRequest)
-			return	
+			return
 		}
 
 		if err := repository.DeleteGrupo(db, id); err != nil {
 			log.Printf("Error deleting group: %v", err)
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
-			return	
+			return
 		}
 
 		w.WriteHeader(http.StatusNoContent)
@@ -161,20 +154,24 @@ func GetGrupoDetailsHandler(db *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		grupoDetail, err := repository.GetGrupoDetails(db, id)
+		// Use the repository function that returns the combined struct
+		grupoWithInvestigadores, err := repository.GetGrupoDetails(db, id)
 		if err != nil {
-			log.Printf("Error getting group details: %v", err)
+			// Log the specific error from the repository
+			log.Printf("Error getting group details from repository: %v", err)
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
 			return
 		}
 
-		if grupoDetail == nil {
+		// Check if the group was found (repository returns nil, nil if not found)
+		if grupoWithInvestigadores == nil {
 			http.Error(w, "Grupo not found", http.StatusNotFound)
 			return
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(grupoDetail)
+		// Encode the combined struct directly
+		json.NewEncoder(w).Encode(grupoWithInvestigadores)
 	}
 }
 
@@ -186,7 +183,7 @@ type InvestigatorRelationshipRequest struct {
 
 // Struct to represent the combined group and details creation request body
 type CreateGrupoWithDetailsRequest struct {
-	models.Grupo             `json:"grupo"`
+	models.Grupo   `json:"grupo"`
 	Investigadores []InvestigatorRelationshipRequest `json:"investigadores"`
 }
 
@@ -206,49 +203,55 @@ func CreateGrupoWithDetailsHandler(db *sql.DB) http.HandlerFunc {
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
 			return
 		}
+		// Use a deferred function for commit/rollback based on error
 		defer func() {
-			if r := recover(); r != nil {
+			if p := recover(); p != nil {
 				tx.Rollback()
-				panic(r)
+				panic(p) // Re-panic after rollback
 			} else if err != nil {
-				tx.Rollback()
+				// Log the error that caused the rollback
+				log.Printf("Rolling back transaction due to error: %v", err)
+				tx.Rollback() // Rollback on any error
 			} else {
-				err = tx.Commit()
+				err = tx.Commit() // Commit otherwise
 				if err != nil {
 					log.Printf("Error committing transaction: %v", err)
-					http.Error(w, "Internal server error", http.StatusInternalServerError)
+					// Don't send HTTP error here as response might have already been written
 				}
 			}
 		}()
 
-		// Create the group within the transaction
+		// Create the group within the transaction using QueryRow with RETURNING
 		grupoToCreate := requestBody.Grupo
-		result, err := tx.Exec("INSERT INTO Grupo (nombre, numeroResolucion, lineaInvestigacion, tipoInvestigacion, fechaRegistro, archivo) VALUES (?, ?, ?, ?, ?, ?)", grupoToCreate.Nombre, grupoToCreate.NumeroResolucion, grupoToCreate.LineaInvestigacion, grupoToCreate.TipoInvestigacion, grupoToCreate.FechaRegistro, grupoToCreate.Archivo)
+		// Use lowercase snake_case names and $n placeholders
+		groupInsertQuery := `INSERT INTO grupo (nombre, numero_resolucion, linea_investigacion, tipo_investigacion, fecha_registro, archivo) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id_grupo`
+		var grupoID int64 // Use int64 for Scan with RETURNING
+
+		err = tx.QueryRow(groupInsertQuery, grupoToCreate.Nombre, grupoToCreate.NumeroResolucion, grupoToCreate.LineaInvestigacion, grupoToCreate.TipoInvestigacion, grupoToCreate.FechaRegistro, grupoToCreate.Archivo).Scan(&grupoID)
 		if err != nil {
+			// Error is logged and transaction rolled back by defer
 			log.Printf("Error inserting group in transaction: %v", err)
-			return // Rollback handled by defer
+			http.Error(w, "Internal server error during group creation", http.StatusInternalServerError)
+			return
 		}
 
-		grupoID, err := result.LastInsertId()
-		if err != nil {
-			log.Printf("Error getting last insert ID for group in transaction: %v", err)
-			return // Rollback handled by defer
-		}
-
-		// Create the detailed relationships within the transaction
+		// Create the detailed relationships within the transaction using Exec
+		// Use lowercase snake_case names and $n placeholders
+		detailInsertQuery := `INSERT INTO detalle_grupo_investigador (id_grupo, id_investigador, tipo_relacion) VALUES ($1, $2, $3)`
 		for _, invRel := range requestBody.Investigadores {
-			_, err := tx.Exec("INSERT INTO Detalle_GrupoInvestigador (idGrupo, idInvestigador, tipoRelacion) VALUES (?, ?, ?)", grupoID, invRel.IDInvestigador, invRel.TipoRelacion)
+			_, err = tx.Exec(detailInsertQuery, grupoID, invRel.IDInvestigador, invRel.TipoRelacion)
 			if err != nil {
+				// Error is logged and transaction rolled back by defer
 				log.Printf("Error inserting group-investigator detail in transaction: %v", err)
-				return // Rollback handled by defer
+				http.Error(w, "Internal server error during detail creation", http.StatusInternalServerError)
+				return
 			}
 		}
 
-		// If we reach here, everything was successful (before explicit commit)
-		// The defer function will handle the commit or rollback based on the 'err' variable.
+		// If we reach here without error, the defer func will handle the commit.
 
-		// Prepare the response (you might want to return the created group with its ID)
-		grupoToCreate.ID = int(grupoID)
+		// Prepare the response
+		grupoToCreate.ID = int(grupoID) // Convert int64 back to int for the response model
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
 		json.NewEncoder(w).Encode(grupoToCreate)

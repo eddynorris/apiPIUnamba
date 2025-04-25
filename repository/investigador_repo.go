@@ -3,12 +3,13 @@ package repository
 import (
 	"database/sql"
 	"fmt"
+
 	"github.com/GoogleCloudPlatform/golang-samples/run/helloworld/models"
 )
 
 // GetAllInvestigadores retrieves all investigators from the database.
 func GetAllInvestigadores(db *sql.DB) ([]models.Investigador, error) {
-	rows, err := db.Query("SELECT idInvestigador, nombre, apellido, rol FROM Investigador")
+	rows, err := db.Query(`SELECT id_investigador, nombre, apellido, rol FROM investigador`)
 	if err != nil {
 		return nil, fmt.Errorf("error querying investigators: %w", err)
 	}
@@ -33,7 +34,7 @@ func GetAllInvestigadores(db *sql.DB) ([]models.Investigador, error) {
 // GetInvestigadorByID retrieves a single investigator by their ID.
 func GetInvestigadorByID(db *sql.DB, id int) (*models.Investigador, error) {
 	var inv models.Investigador
-	err := db.QueryRow("SELECT idInvestigador, nombre, apellido, rol FROM Investigador WHERE idInvestigador = ?", id).Scan(&inv.ID, &inv.Nombre, &inv.Apellido, &inv.Rol)
+	err := db.QueryRow(`SELECT id_investigador, nombre, apellido, rol FROM investigador WHERE id_investigador = $1`, id).Scan(&inv.ID, &inv.Nombre, &inv.Apellido, &inv.Rol)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil // Return nil for both when not found
@@ -45,23 +46,17 @@ func GetInvestigadorByID(db *sql.DB, id int) (*models.Investigador, error) {
 
 // CreateInvestigador inserts a new investigator into the database.
 func CreateInvestigador(db *sql.DB, inv *models.Investigador) error {
-	result, err := db.Exec("INSERT INTO Investigador (nombre, apellido, rol) VALUES (?, ?, ?)", inv.Nombre, inv.Apellido, inv.Rol)
+	query := `INSERT INTO investigador (nombre, apellido, rol) VALUES ($1, $2, $3) RETURNING id_investigador`
+	err := db.QueryRow(query, inv.Nombre, inv.Apellido, inv.Rol).Scan(&inv.ID)
 	if err != nil {
 		return fmt.Errorf("error inserting investigator: %w", err)
 	}
-
-	id, err := result.LastInsertId()
-	if err != nil {
-		return fmt.Errorf("error getting last insert ID: %w", err)
-	}
-
-	inv.ID = int(id)
 	return nil
 }
 
 // UpdateInvestigador updates an existing investigator in the database.
 func UpdateInvestigador(db *sql.DB, inv *models.Investigador) error {
-	_, err := db.Exec("UPDATE Investigador SET nombre = ?, apellido = ?, rol = ? WHERE idInvestigador = ?", inv.Nombre, inv.Apellido, inv.Rol, inv.ID)
+	_, err := db.Exec(`UPDATE investigador SET nombre = $1, apellido = $2, rol = $3 WHERE id_investigador = $4`, inv.Nombre, inv.Apellido, inv.Rol, inv.ID)
 	if err != nil {
 		return fmt.Errorf("error updating investigator: %w", err)
 	}
@@ -70,7 +65,7 @@ func UpdateInvestigador(db *sql.DB, inv *models.Investigador) error {
 
 // DeleteInvestigador deletes an investigator from the database.
 func DeleteInvestigador(db *sql.DB, id int) error {
-	_, err := db.Exec("DELETE FROM Investigador WHERE idInvestigador = ?", id)
+	_, err := db.Exec(`DELETE FROM investigador WHERE id_investigador = $1`, id)
 	if err != nil {
 		return fmt.Errorf("error deleting investigator: %w", err)
 	}
@@ -79,13 +74,15 @@ func DeleteInvestigador(db *sql.DB, id int) error {
 
 // SearchInvestigadores searches for investigators based on optional criteria.
 func SearchInvestigadores(db *sql.DB, name string) ([]models.Investigador, error) {
-	query := "SELECT idInvestigador, nombre, apellido, rol FROM Investigador WHERE 1=1"
+	query := `SELECT id_investigador, nombre, apellido, rol FROM investigador WHERE 1=1`
 	args := []interface{}{}
+	placeholderCount := 1
 
 	if name != "" {
-		query += " AND (nombre LIKE ? OR apellido LIKE ?)"
+		query += fmt.Sprintf(` AND (nombre ILIKE $%d OR apellido ILIKE $%d)`, placeholderCount, placeholderCount+1)
 		searchPattern := "%" + name + "%"
 		args = append(args, searchPattern, searchPattern)
+		placeholderCount += 2 // Increment by 2 because we added two placeholders
 	}
 
 	rows, err := db.Query(query, args...)

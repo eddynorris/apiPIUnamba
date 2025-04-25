@@ -3,28 +3,25 @@ package repository
 import (
 	"database/sql"
 	"fmt"
+
 	"github.com/GoogleCloudPlatform/golang-samples/run/helloworld/models"
 )
 
 // CreateDetalleGrupoInvestigador inserts a new relationship between a group and an investigator.
 func CreateDetalleGrupoInvestigador(db *sql.DB, detalle *models.DetalleGrupoInvestigador) error {
-	result, err := db.Exec("INSERT INTO Detalle_GrupoInvestigador (idGrupo, idInvestigador, tipoRelacion) VALUES (?, ?, ?)", detalle.IDGrupo, detalle.IDInvestigador, detalle.TipoRelacion)
+	// Use lowercase snake_case, $n placeholders, and RETURNING
+	query := `INSERT INTO detalle_grupo_investigador (id_grupo, id_investigador, tipo_relacion) VALUES ($1, $2, $3) RETURNING id_detalle_gi`
+	err := db.QueryRow(query, detalle.IDGrupo, detalle.IDInvestigador, detalle.TipoRelacion).Scan(&detalle.ID)
 	if err != nil {
 		return fmt.Errorf("error inserting group-investigator detail: %w", err)
 	}
-
-	id, err := result.LastInsertId()
-	if err != nil {
-		return fmt.Errorf("error getting last insert ID for group-investigator detail: %w", err)
-	}
-
-	detalle.ID = int(id)
 	return nil
 }
 
 // GetDetallesByGrupoID retrieves all relationship details for a given group ID.
 func GetDetallesByGrupoID(db *sql.DB, grupoID int) ([]models.DetalleGrupoInvestigador, error) {
-	rows, err := db.Query("SELECT idDetalleGI, idGrupo, idInvestigador, tipoRelacion FROM Detalle_GrupoInvestigador WHERE idGrupo = ?", grupoID)
+	// Use lowercase snake_case and $1 placeholder
+	rows, err := db.Query(`SELECT id_detalle_gi, id_grupo, id_investigador, tipo_relacion FROM detalle_grupo_investigador WHERE id_grupo = $1`, grupoID)
 	if err != nil {
 		return nil, fmt.Errorf("error querying group-investigator details by group ID: %w", err)
 	}
@@ -33,6 +30,7 @@ func GetDetallesByGrupoID(db *sql.DB, grupoID int) ([]models.DetalleGrupoInvesti
 	detalles := []models.DetalleGrupoInvestigador{}
 	for rows.Next() {
 		var d models.DetalleGrupoInvestigador
+		// Ensure SELECT order matches struct fields
 		if err := rows.Scan(&d.ID, &d.IDGrupo, &d.IDInvestigador, &d.TipoRelacion); err != nil {
 			return nil, fmt.Errorf("error scanning group-investigator detail row: %w", err)
 		}
@@ -48,7 +46,8 @@ func GetDetallesByGrupoID(db *sql.DB, grupoID int) ([]models.DetalleGrupoInvesti
 
 // DeleteDetalleGrupoInvestigador deletes a specific relationship detail by its ID.
 func DeleteDetalleGrupoInvestigador(db *sql.DB, id int) error {
-	_, err := db.Exec("DELETE FROM Detalle_GrupoInvestigador WHERE idDetalleGI = ?", id)
+	// Use lowercase snake_case and $1 placeholder
+	_, err := db.Exec(`DELETE FROM detalle_grupo_investigador WHERE id_detalle_gi = $1`, id)
 	if err != nil {
 		return fmt.Errorf("error deleting group-investigator detail: %w", err)
 	}
@@ -59,7 +58,8 @@ func DeleteDetalleGrupoInvestigador(db *sql.DB, id int) error {
 // This might be useful for updating a specific relationship (e.g., changing a role).
 func GetDetalleGrupoInvestigadorByID(db *sql.DB, id int) (*models.DetalleGrupoInvestigador, error) {
 	var d models.DetalleGrupoInvestigador
-	err := db.QueryRow("SELECT idDetalleGI, idGrupo, idInvestigador, tipoRelacion FROM Detalle_GrupoInvestigador WHERE idDetalleGI = ?", id).Scan(&d.ID, &d.IDGrupo, &d.IDInvestigador, &d.TipoRelacion)
+	// Use lowercase snake_case and $1 placeholder
+	err := db.QueryRow(`SELECT id_detalle_gi, id_grupo, id_investigador, tipo_relacion FROM detalle_grupo_investigador WHERE id_detalle_gi = $1`, id).Scan(&d.ID, &d.IDGrupo, &d.IDInvestigador, &d.TipoRelacion)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil // Return nil for both when not found
@@ -71,7 +71,8 @@ func GetDetalleGrupoInvestigadorByID(db *sql.DB, id int) (*models.DetalleGrupoIn
 
 // UpdateDetalleGrupoInvestigador updates an existing relationship detail.
 func UpdateDetalleGrupoInvestigador(db *sql.DB, detalle *models.DetalleGrupoInvestigador) error {
-	_, err := db.Exec("UPDATE Detalle_GrupoInvestigador SET idGrupo = ?, idInvestigador = ?, tipoRelacion = ? WHERE idDetalleGI = ?", detalle.IDGrupo, detalle.IDInvestigador, detalle.TipoRelacion, detalle.ID)
+	// Use lowercase snake_case and $n placeholders
+	_, err := db.Exec(`UPDATE detalle_grupo_investigador SET id_grupo = $1, id_investigador = $2, tipo_relacion = $3 WHERE id_detalle_gi = $4`, detalle.IDGrupo, detalle.IDInvestigador, detalle.TipoRelacion, detalle.ID)
 	if err != nil {
 		return fmt.Errorf("error updating group-investigator detail: %w", err)
 	}

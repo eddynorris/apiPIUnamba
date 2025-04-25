@@ -35,7 +35,8 @@ func main() {
 	r.HandleFunc("/investigadores/{id}", handlers.DeleteInvestigadorHandler(db)).Methods("DELETE")
 
 	// Grupo routes (GET will now handle search)
-	r.HandleFunc("/grupos", handlers.GetGruposHandler(db)).Methods("GET")	r.HandleFunc("/grupos", handlers.CreateGrupoHandler(db)).Methods("POST")
+	r.HandleFunc("/grupos", handlers.GetGruposHandler(db)).Methods("GET")
+	r.HandleFunc("/grupos", handlers.CreateGrupoHandler(db)).Methods("POST")
 	r.HandleFunc("/grupos/with-details", handlers.CreateGrupoWithDetailsHandler(db)).Methods("POST") // New endpoint for combined creation
 	r.HandleFunc("/grupos/{id}", handlers.GetGrupoHandler(db)).Methods("GET")
 	r.HandleFunc("/grupos/{id}", handlers.UpdateGrupoHandler(db)).Methods("PUT")
