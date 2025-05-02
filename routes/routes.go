@@ -17,6 +17,7 @@ func SetupRoutes(db *sql.DB) *mux.Router {
 	r.HandleFunc("/investigadores/{id}", controllers.GetInvestigadorHandler(db)).Methods("GET")
 	r.HandleFunc("/investigadores/{id}", controllers.UpdateInvestigadorHandler(db)).Methods("PUT")
 	r.HandleFunc("/investigadores/{id}", controllers.DeleteInvestigadorHandler(db)).Methods("DELETE")
+	r.HandleFunc("/investigadores/{idInvestigador}/grupos", controllers.GetGruposByInvestigadorHandler(db)).Methods("GET")
 
 	// Grupo routes
 	r.HandleFunc("/grupos", controllers.GetGruposHandler(db)).Methods("GET")

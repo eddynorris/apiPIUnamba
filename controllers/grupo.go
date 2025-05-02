@@ -18,13 +18,14 @@ func GetGruposHandler(db *sql.DB) http.HandlerFunc {
 		groupName := r.URL.Query().Get("grupo")
 		investigatorName := r.URL.Query().Get("investigador")
 		year := r.URL.Query().Get("año") // Assuming 'año' is the query parameter for year
+		lineaInvestigacion := r.URL.Query().Get("lineaInvestigacion")
 
 		var grupos []models.Grupo
 		var err error
 
-		if groupName != "" || investigatorName != "" || year != "" {
+		if groupName != "" || investigatorName != "" || year != "" || lineaInvestigacion != "" {
 			// Perform search if any query parameter is provided
-			grupos, err = repository.SearchGrupos(db, groupName, investigatorName, year)
+			grupos, err = repository.SearchGrupos(db, groupName, investigatorName, year, lineaInvestigacion)
 		} else {
 			// Otherwise, get all groups
 			grupos, err = repository.GetAllGrupos(db)
@@ -224,7 +225,7 @@ func CreateGrupoWithDetailsHandler(db *sql.DB) http.HandlerFunc {
 		// Create the group within the transaction using QueryRow with RETURNING
 		grupoToCreate := requestBody.Grupo
 		// Use lowercase snake_case names and $n placeholders
-		groupInsertQuery := `INSERT INTO grupo (nombre, numero_resolucion, linea_investigacion, tipo_investigacion, fecha_registro, archivo) VALUES ($1, $2, $3, $4, $5, $6) RETURNING idGrupo`
+		groupInsertQuery := `INSERT INTO grupo (nombre, numeroResolucion, lineaInvestigacion, tipoInvestigacion, fechaRegistro, archivo) VALUES ($1, $2, $3, $4, $5, $6) RETURNING idGrupo`
 		var grupoID int64 // Use int64 for Scan with RETURNING
 
 		err = tx.QueryRow(groupInsertQuery, grupoToCreate.Nombre, grupoToCreate.NumeroResolucion, grupoToCreate.LineaInvestigacion, grupoToCreate.TipoInvestigacion, grupoToCreate.FechaRegistro, grupoToCreate.Archivo).Scan(&grupoID)
@@ -237,7 +238,7 @@ func CreateGrupoWithDetailsHandler(db *sql.DB) http.HandlerFunc {
 
 		// Create the detailed relationships within the transaction using Exec
 		// Use lowercase snake_case names and $n placeholders
-		detailInsertQuery := `INSERT INTO detalle_grupo_investigador (idGrupo, idInvestigador, tipo_relacion) VALUES ($1, $2, $3)`
+		detailInsertQuery := `INSERT INTO Grupo_Investigador (idGrupo, idInvestigador, tipo_relacion) VALUES ($1, $2, $3)`
 		for _, invRel := range requestBody.Investigadores {
 			_, err = tx.Exec(detailInsertQuery, grupoID, invRel.IDInvestigador, invRel.TipoRelacion)
 			if err != nil {
@@ -255,5 +256,37 @@ func CreateGrupoWithDetailsHandler(db *sql.DB) http.HandlerFunc {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
 		json.NewEncoder(w).Encode(grupoToCreate)
+	}
+}
+
+// GetGruposByInvestigadorHandler maneja la obtención de todos los grupos a los que pertenece un investigador.
+func GetGruposByInvestigadorHandler(db *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		vars := mux.Vars(r)
+		idStr := vars["idInvestigador"]
+		id, err := strconv.Atoi(idStr)
+		if err != nil {
+			http.Error(w, "ID de investigador inválido", http.StatusBadRequest)
+			return
+		}
+
+		gruposConIntegrantes, err := repository.GetGruposByInvestigadorID(db, id)
+		if err != nil {
+			log.Printf("Error obteniendo grupos por investigador: %v", err)
+			http.Error(w, "Error interno del servidor", http.StatusInternalServerError)
+			return
+		}
+
+		// Enriquecer la respuesta para incluir los integrantes con su rol
+		var respuesta []map[string]interface{}
+		for _, grupoConInt := range gruposConIntegrantes {
+			respuesta = append(respuesta, map[string]interface{}{
+				"grupo":       grupoConInt["grupo"],
+				"integrantes": grupoConInt["integrantes"],
+			})
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(respuesta)
 	}
 }

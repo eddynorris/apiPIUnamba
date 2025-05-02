@@ -9,7 +9,7 @@ import (
 
 // GetAllGrupos retrieves all groups from the database.
 func GetAllGrupos(db *sql.DB) ([]models.Grupo, error) {
-	rows, err := db.Query(`SELECT idGrupo, nombre, numero_resolucion, linea_investigacion, tipo_investigacion, fecha_registro, archivo, createdAt, updatedAt FROM grupo`)
+	rows, err := db.Query(`SELECT idGrupo, nombre, numeroResolucion, lineaInvestigacion, tipoInvestigacion, fechaRegistro, archivo, createdAt, updatedAt FROM grupo`)
 	if err != nil {
 		return nil, fmt.Errorf("error querying groups: %w", err)
 	}
@@ -34,7 +34,7 @@ func GetAllGrupos(db *sql.DB) ([]models.Grupo, error) {
 // GetGrupoByID retrieves a single group by its ID.
 func GetGrupoByID(db *sql.DB, id int) (*models.Grupo, error) {
 	var g models.Grupo
-	err := db.QueryRow(`SELECT idGrupo, nombre, numero_resolucion, linea_investigacion, tipo_investigacion, fecha_registro, archivo, createdAt, updatedAt FROM grupo WHERE idGrupo = $1`, id).Scan(&g.ID, &g.Nombre, &g.NumeroResolucion, &g.LineaInvestigacion, &g.TipoInvestigacion, &g.FechaRegistro, &g.Archivo, &g.CreatedAt, &g.UpdatedAt)
+	err := db.QueryRow(`SELECT idGrupo, nombre, numeroResolucion, lineaInvestigacion, tipoInvestigacion, fechaRegistro, archivo, createdAt, updatedAt FROM grupo WHERE idGrupo = $1`, id).Scan(&g.ID, &g.Nombre, &g.NumeroResolucion, &g.LineaInvestigacion, &g.TipoInvestigacion, &g.FechaRegistro, &g.Archivo, &g.CreatedAt, &g.UpdatedAt)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil // Return nil for both when not found
@@ -46,7 +46,7 @@ func GetGrupoByID(db *sql.DB, id int) (*models.Grupo, error) {
 
 // CreateGrupo inserts a new group into the database.
 func CreateGrupo(db *sql.DB, g *models.Grupo) error {
-	query := `INSERT INTO grupo (nombre, numero_resolucion, linea_investigacion, tipo_investigacion, fecha_registro, archivo) VALUES ($1, $2, $3, $4, $5, $6) RETURNING idGrupo, createdAt, updatedAt`
+	query := `INSERT INTO grupo (nombre, numeroResolucion, lineaInvestigacion, tipoInvestigacion, fechaRegistro, archivo) VALUES ($1, $2, $3, $4, $5, $6) RETURNING idGrupo, createdAt, updatedAt`
 	err := db.QueryRow(query, g.Nombre, g.NumeroResolucion, g.LineaInvestigacion, g.TipoInvestigacion, g.FechaRegistro, g.Archivo).Scan(&g.ID, &g.CreatedAt, &g.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("error inserting group: %w", err)
@@ -56,7 +56,7 @@ func CreateGrupo(db *sql.DB, g *models.Grupo) error {
 
 // UpdateGrupo updates an existing group in the database.
 func UpdateGrupo(db *sql.DB, g *models.Grupo) error {
-	_, err := db.Exec(`UPDATE grupo SET nombre = $1, numero_resolucion = $2, linea_investigacion = $3, tipo_investigacion = $4, fecha_registro = $5, archivo = $6, updatedAt = CURRENT_TIMESTAMP WHERE idGrupo = $7`, g.Nombre, g.NumeroResolucion, g.LineaInvestigacion, g.TipoInvestigacion, g.FechaRegistro, g.Archivo, g.ID)
+	_, err := db.Exec(`UPDATE grupo SET nombre = $1, numeroResolucion = $2, lineaInvestigacion = $3, tipoInvestigacion = $4, fechaRegistro = $5, archivo = $6, updatedAt = CURRENT_TIMESTAMP WHERE idGrupo = $7`, g.Nombre, g.NumeroResolucion, g.LineaInvestigacion, g.TipoInvestigacion, g.FechaRegistro, g.Archivo, g.ID)
 	if err != nil {
 		return fmt.Errorf("error updating group: %w", err)
 	}
@@ -73,10 +73,10 @@ func DeleteGrupo(db *sql.DB, id int) error {
 }
 
 // SearchGrupos searches for groups based on optional criteria.
-func SearchGrupos(db *sql.DB, groupName, investigatorName, year string) ([]models.Grupo, error) {
-	query := `SELECT DISTINCT g.idGrupo, g.nombre, g.numero_resolucion, g.linea_investigacion, g.tipo_investigacion, g.fecha_registro, g.archivo, g.createdAt, g.updatedAt
+func SearchGrupos(db *sql.DB, groupName, investigatorName, year, lineaInvestigacion string) ([]models.Grupo, error) {
+	query := `SELECT DISTINCT g.idGrupo, g.nombre, g.numeroResolucion, g.lineaInvestigacion, g.tipoInvestigacion, g.fechaRegistro, g.archivo, g.createdAt, g.updatedAt
 			 FROM grupo g
-			 JOIN detalle_grupo_investigador dgi ON g.idGrupo = dgi.idGrupo
+			 JOIN Grupo_Investigador dgi ON g.idGrupo = dgi.idGrupo
 			 JOIN investigador i ON dgi.idInvestigador = i.idInvestigador
 			 WHERE 1=1`
 	args := []interface{}{}
@@ -95,8 +95,14 @@ func SearchGrupos(db *sql.DB, groupName, investigatorName, year string) ([]model
 	}
 
 	if year != "" {
-		query += fmt.Sprintf(` AND EXTRACT(YEAR FROM g.fecha_registro) = $%d`, placeholderCount)
+		query += fmt.Sprintf(` AND EXTRACT(YEAR FROM g.fechaRegistro) = $%d`, placeholderCount)
 		args = append(args, year)
+		placeholderCount++
+	}
+
+	if lineaInvestigacion != "" {
+		query += fmt.Sprintf(` AND g.lineaInvestigacion ILIKE $%d`, placeholderCount)
+		args = append(args, "%"+lineaInvestigacion+"%")
 		placeholderCount++
 	}
 
@@ -137,9 +143,9 @@ func GetGrupoDetails(db *sql.DB, id int) (*models.GrupoWithInvestigadores, error
 
 	// 2. Get associated investigators
 	query := `
-		SELECT i.idInvestigador, i.nombre, i.apellido, i.rol
+		SELECT i.idInvestigador, i.nombre, i.apellido
 		FROM investigador i
-		JOIN detalle_grupo_investigador dgi ON i.idInvestigador = dgi.idInvestigador
+		JOIN Grupo_Investigador dgi ON i.idInvestigador = dgi.idInvestigador
 		WHERE dgi.idGrupo = $1
 	`
 	rows, err := db.Query(query, id)
@@ -168,4 +174,64 @@ func GetGrupoDetails(db *sql.DB, id int) (*models.GrupoWithInvestigadores, error
 	}
 
 	return grupoDetail, nil
+}
+
+// GetGruposByInvestigadorID obtiene todos los grupos a los que pertenece un investigador dado su id.
+func GetGruposByInvestigadorID(db *sql.DB, idInvestigador int) ([]map[string]interface{}, error) {
+	query := `SELECT g.idGrupo, g.nombre, g.numeroResolucion, g.lineaInvestigacion, g.tipoInvestigacion, g.fechaRegistro, g.archivo, g.createdAt, g.updatedAt
+				 , dgi.rol
+			 FROM grupo g
+			 JOIN Grupo_Investigador dgi ON g.idGrupo = dgi.idGrupo
+			 WHERE dgi.idInvestigador = $1`
+	rows, err := db.Query(query, idInvestigador)
+	if err != nil {
+		return nil, fmt.Errorf("error obteniendo grupos por idInvestigador: %w", err)
+	}
+	defer rows.Close()
+
+	var gruposConIntegrantes []map[string]interface{}
+	for rows.Next() {
+		var g models.Grupo
+		var rol string
+		if err := rows.Scan(&g.ID, &g.Nombre, &g.NumeroResolucion, &g.LineaInvestigacion, &g.TipoInvestigacion, &g.FechaRegistro, &g.Archivo, &g.CreatedAt, &g.UpdatedAt, &rol); err != nil {
+			return nil, fmt.Errorf("error escaneando grupo: %w", err)
+		}
+
+		// Obtener los integrantes y sus roles para este grupo
+		queryIntegrantes := `SELECT i.idInvestigador, i.nombre, i.apellido, dgi.rol
+			FROM investigador i
+			JOIN Grupo_Investigador dgi ON i.idInvestigador = dgi.idInvestigador
+			WHERE dgi.idGrupo = $1`
+		rowsIntegrantes, err := db.Query(queryIntegrantes, g.ID)
+		if err != nil {
+			return nil, fmt.Errorf("error obteniendo integrantes del grupo: %w", err)
+		}
+		var integrantesConRol []map[string]interface{}
+		for rowsIntegrantes.Next() {
+			var idInvestigador int
+			var nombre, apellido, rolIntegrante string
+			if err := rowsIntegrantes.Scan(&idInvestigador, &nombre, &apellido, &rolIntegrante); err != nil {
+				rowsIntegrantes.Close()
+				return nil, fmt.Errorf("error escaneando integrante: %w", err)
+			}
+			integrantesConRol = append(integrantesConRol, map[string]interface{}{
+				"idInvestigador": idInvestigador,
+				"nombre":         nombre,
+				"apellido":       apellido,
+				"rol":            rolIntegrante,
+			})
+		}
+		rowsIntegrantes.Close()
+
+		grupoMap := map[string]interface{}{
+			"grupo":       g,
+			"integrantes": integrantesConRol,
+		}
+		gruposConIntegrantes = append(gruposConIntegrantes, grupoMap)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error después de iterar los grupos: %w", err)
+	}
+	return gruposConIntegrantes, nil
 }

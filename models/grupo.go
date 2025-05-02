@@ -6,11 +6,11 @@ import "time"
 type Grupo struct {
 	ID                 int       `json:"idGrupo" db:"idGrupo"`
 	Nombre             string    `json:"nombre" db:"nombre"`
-	NumeroResolucion   string    `json:"numeroResolucion" db:"numero_resolucion"`
-	LineaInvestigacion string    `json:"lineaInvestigacion" db:"linea_investigacion"`
-	TipoInvestigacion  string    `json:"tipoInvestigacion" db:"tipo_investigacion"`
-	FechaRegistro      time.Time `json:"fechaRegistro" db:"fecha_registro"`
-	Archivo            string    `json:"archivo" db:"archivo"`
+	NumeroResolucion   string    `json:"numeroResolucion" db:"numeroResolucion"`
+	LineaInvestigacion string    `json:"lineaInvestigacion" db:"lineaInvestigacion"`
+	TipoInvestigacion  string    `json:"tipoInvestigacion" db:"tipoInvestigacion"`
+	FechaRegistro      time.Time `json:"fechaRegistro" db:"fechaRegistro"`
+	Archivo            *string   `json:"archivo" db:"archivo"`
 	CreatedAt          time.Time `json:"createdAt" db:"createdAt"`
 	UpdatedAt          time.Time `json:"updatedAt" db:"updatedAt"`
 }
