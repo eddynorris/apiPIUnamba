@@ -9,7 +9,7 @@ import (
 
 // GetAllGrupos retrieves all groups from the database.
 func GetAllGrupos(db *sql.DB) ([]models.Grupo, error) {
-	rows, err := db.Query(`SELECT id_grupo, nombre, numero_resolucion, linea_investigacion, tipo_investigacion, fecha_registro, archivo FROM grupo`)
+	rows, err := db.Query(`SELECT idGrupo, nombre, numero_resolucion, linea_investigacion, tipo_investigacion, fecha_registro, archivo, createdAt, updatedAt FROM grupo`)
 	if err != nil {
 		return nil, fmt.Errorf("error querying groups: %w", err)
 	}
@@ -18,7 +18,7 @@ func GetAllGrupos(db *sql.DB) ([]models.Grupo, error) {
 	grupos := []models.Grupo{}
 	for rows.Next() {
 		var g models.Grupo
-		if err := rows.Scan(&g.ID, &g.Nombre, &g.NumeroResolucion, &g.LineaInvestigacion, &g.TipoInvestigacion, &g.FechaRegistro, &g.Archivo); err != nil {
+		if err := rows.Scan(&g.ID, &g.Nombre, &g.NumeroResolucion, &g.LineaInvestigacion, &g.TipoInvestigacion, &g.FechaRegistro, &g.Archivo, &g.CreatedAt, &g.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("error scanning group row: %w", err)
 		}
 		grupos = append(grupos, g)
@@ -34,7 +34,7 @@ func GetAllGrupos(db *sql.DB) ([]models.Grupo, error) {
 // GetGrupoByID retrieves a single group by its ID.
 func GetGrupoByID(db *sql.DB, id int) (*models.Grupo, error) {
 	var g models.Grupo
-	err := db.QueryRow(`SELECT id_grupo, nombre, numero_resolucion, linea_investigacion, tipo_investigacion, fecha_registro, archivo FROM grupo WHERE id_grupo = $1`, id).Scan(&g.ID, &g.Nombre, &g.NumeroResolucion, &g.LineaInvestigacion, &g.TipoInvestigacion, &g.FechaRegistro, &g.Archivo)
+	err := db.QueryRow(`SELECT idGrupo, nombre, numero_resolucion, linea_investigacion, tipo_investigacion, fecha_registro, archivo, createdAt, updatedAt FROM grupo WHERE idGrupo = $1`, id).Scan(&g.ID, &g.Nombre, &g.NumeroResolucion, &g.LineaInvestigacion, &g.TipoInvestigacion, &g.FechaRegistro, &g.Archivo, &g.CreatedAt, &g.UpdatedAt)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil // Return nil for both when not found
@@ -46,8 +46,8 @@ func GetGrupoByID(db *sql.DB, id int) (*models.Grupo, error) {
 
 // CreateGrupo inserts a new group into the database.
 func CreateGrupo(db *sql.DB, g *models.Grupo) error {
-	query := `INSERT INTO grupo (nombre, numero_resolucion, linea_investigacion, tipo_investigacion, fecha_registro, archivo) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id_grupo`
-	err := db.QueryRow(query, g.Nombre, g.NumeroResolucion, g.LineaInvestigacion, g.TipoInvestigacion, g.FechaRegistro, g.Archivo).Scan(&g.ID)
+	query := `INSERT INTO grupo (nombre, numero_resolucion, linea_investigacion, tipo_investigacion, fecha_registro, archivo) VALUES ($1, $2, $3, $4, $5, $6) RETURNING idGrupo, createdAt, updatedAt`
+	err := db.QueryRow(query, g.Nombre, g.NumeroResolucion, g.LineaInvestigacion, g.TipoInvestigacion, g.FechaRegistro, g.Archivo).Scan(&g.ID, &g.CreatedAt, &g.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("error inserting group: %w", err)
 	}
@@ -56,7 +56,7 @@ func CreateGrupo(db *sql.DB, g *models.Grupo) error {
 
 // UpdateGrupo updates an existing group in the database.
 func UpdateGrupo(db *sql.DB, g *models.Grupo) error {
-	_, err := db.Exec(`UPDATE grupo SET nombre = $1, numero_resolucion = $2, linea_investigacion = $3, tipo_investigacion = $4, fecha_registro = $5, archivo = $6 WHERE id_grupo = $7`, g.Nombre, g.NumeroResolucion, g.LineaInvestigacion, g.TipoInvestigacion, g.FechaRegistro, g.Archivo, g.ID)
+	_, err := db.Exec(`UPDATE grupo SET nombre = $1, numero_resolucion = $2, linea_investigacion = $3, tipo_investigacion = $4, fecha_registro = $5, archivo = $6, updatedAt = CURRENT_TIMESTAMP WHERE idGrupo = $7`, g.Nombre, g.NumeroResolucion, g.LineaInvestigacion, g.TipoInvestigacion, g.FechaRegistro, g.Archivo, g.ID)
 	if err != nil {
 		return fmt.Errorf("error updating group: %w", err)
 	}
@@ -65,7 +65,7 @@ func UpdateGrupo(db *sql.DB, g *models.Grupo) error {
 
 // DeleteGrupo deletes a group from the database.
 func DeleteGrupo(db *sql.DB, id int) error {
-	_, err := db.Exec(`DELETE FROM grupo WHERE id_grupo = $1`, id)
+	_, err := db.Exec(`DELETE FROM grupo WHERE idGrupo = $1`, id)
 	if err != nil {
 		return fmt.Errorf("error deleting group: %w", err)
 	}
@@ -74,10 +74,10 @@ func DeleteGrupo(db *sql.DB, id int) error {
 
 // SearchGrupos searches for groups based on optional criteria.
 func SearchGrupos(db *sql.DB, groupName, investigatorName, year string) ([]models.Grupo, error) {
-	query := `SELECT DISTINCT g.id_grupo, g.nombre, g.numero_resolucion, g.linea_investigacion, g.tipo_investigacion, g.fecha_registro, g.archivo
+	query := `SELECT DISTINCT g.idGrupo, g.nombre, g.numero_resolucion, g.linea_investigacion, g.tipo_investigacion, g.fecha_registro, g.archivo, g.createdAt, g.updatedAt
 			 FROM grupo g
-			 JOIN detalle_grupo_investigador dgi ON g.id_grupo = dgi.id_grupo
-			 JOIN investigador i ON dgi.id_investigador = i.id_investigador
+			 JOIN detalle_grupo_investigador dgi ON g.idGrupo = dgi.idGrupo
+			 JOIN investigador i ON dgi.idInvestigador = i.idInvestigador
 			 WHERE 1=1`
 	args := []interface{}{}
 	placeholderCount := 1
@@ -109,7 +109,7 @@ func SearchGrupos(db *sql.DB, groupName, investigatorName, year string) ([]model
 	grupos := []models.Grupo{}
 	for rows.Next() {
 		var g models.Grupo
-		if err := rows.Scan(&g.ID, &g.Nombre, &g.NumeroResolucion, &g.LineaInvestigacion, &g.TipoInvestigacion, &g.FechaRegistro, &g.Archivo); err != nil {
+		if err := rows.Scan(&g.ID, &g.Nombre, &g.NumeroResolucion, &g.LineaInvestigacion, &g.TipoInvestigacion, &g.FechaRegistro, &g.Archivo, &g.CreatedAt, &g.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("error scanning group row during search: %w", err)
 		}
 		grupos = append(grupos, g)
@@ -137,10 +137,10 @@ func GetGrupoDetails(db *sql.DB, id int) (*models.GrupoWithInvestigadores, error
 
 	// 2. Get associated investigators
 	query := `
-		SELECT i.id_investigador, i.nombre, i.apellido, i.rol
+		SELECT i.idInvestigador, i.nombre, i.apellido, i.rol
 		FROM investigador i
-		JOIN detalle_grupo_investigador dgi ON i.id_investigador = dgi.id_investigador
-		WHERE dgi.id_grupo = $1
+		JOIN detalle_grupo_investigador dgi ON i.idInvestigador = dgi.idInvestigador
+		WHERE dgi.idGrupo = $1
 	`
 	rows, err := db.Query(query, id)
 	if err != nil {
@@ -151,7 +151,7 @@ func GetGrupoDetails(db *sql.DB, id int) (*models.GrupoWithInvestigadores, error
 	investigadores := []models.Investigador{}
 	for rows.Next() {
 		var inv models.Investigador
-		if err := rows.Scan(&inv.ID, &inv.Nombre, &inv.Apellido, &inv.Rol); err != nil {
+		if err := rows.Scan(&inv.ID, &inv.Nombre, &inv.Apellido); err != nil {
 			return nil, fmt.Errorf("error scanning investigator row for group details: %w", err)
 		}
 		investigadores = append(investigadores, inv)

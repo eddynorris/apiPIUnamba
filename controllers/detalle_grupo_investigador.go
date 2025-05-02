@@ -1,4 +1,4 @@
-package handlers
+package controllers
 
 import (
 	"database/sql"
@@ -18,17 +18,17 @@ func CreateDetalleGrupoInvestigadorHandler(db *sql.DB) http.HandlerFunc {
 		var detalle models.DetalleGrupoInvestigador
 		if err := json.NewDecoder(r.Body).Decode(&detalle); err != nil {
 			http.Error(w, "Invalid request body", http.StatusBadRequest)
-			return	
+			return
 		}
 
 		if err := repository.CreateDetalleGrupoInvestigador(db, &detalle); err != nil {
-			log.Printf("Error creating group-investigator detail: %v", err)
+			log.Printf("Error creating group-investigator relationship: %v", err)
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
 			return
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
+		w.WriteHeader(http.StatusCreated)
 		json.NewEncoder(w).Encode(detalle)
 	}
 }
@@ -41,7 +41,7 @@ func GetDetalleGrupoInvestigadorHandler(db *sql.DB) http.HandlerFunc {
 		id, err := strconv.Atoi(idStr)
 		if err != nil {
 			http.Error(w, "Invalid detail ID", http.StatusBadRequest)
-			return	
+			return
 		}
 
 		detalle, err := repository.GetDetalleGrupoInvestigadorByID(db, id)
@@ -75,7 +75,7 @@ func UpdateDetalleGrupoInvestigadorHandler(db *sql.DB) http.HandlerFunc {
 		var detalle models.DetalleGrupoInvestigador
 		if err := json.NewDecoder(r.Body).Decode(&detalle); err != nil {
 			http.Error(w, "Invalid request body", http.StatusBadRequest)
-			return	
+			return
 		}
 
 		// Ensure the ID in the body matches the ID in the URL
@@ -88,7 +88,7 @@ func UpdateDetalleGrupoInvestigadorHandler(db *sql.DB) http.HandlerFunc {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
+		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(detalle)
 	}
 }

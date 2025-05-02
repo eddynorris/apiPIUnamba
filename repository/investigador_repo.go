@@ -9,7 +9,7 @@ import (
 
 // GetAllInvestigadores retrieves all investigators from the database.
 func GetAllInvestigadores(db *sql.DB) ([]models.Investigador, error) {
-	rows, err := db.Query(`SELECT id_investigador, nombre, apellido, rol FROM investigador`)
+	rows, err := db.Query(`SELECT idInvestigador, nombre, apellido, createdAt, updatedAt FROM investigador`)
 	if err != nil {
 		return nil, fmt.Errorf("error querying investigators: %w", err)
 	}
@@ -18,7 +18,7 @@ func GetAllInvestigadores(db *sql.DB) ([]models.Investigador, error) {
 	investigadores := []models.Investigador{}
 	for rows.Next() {
 		var inv models.Investigador
-		if err := rows.Scan(&inv.ID, &inv.Nombre, &inv.Apellido, &inv.Rol); err != nil {
+		if err := rows.Scan(&inv.ID, &inv.Nombre, &inv.Apellido, &inv.CreatedAt, &inv.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("error scanning investigator row: %w", err)
 		}
 		investigadores = append(investigadores, inv)
@@ -34,7 +34,7 @@ func GetAllInvestigadores(db *sql.DB) ([]models.Investigador, error) {
 // GetInvestigadorByID retrieves a single investigator by their ID.
 func GetInvestigadorByID(db *sql.DB, id int) (*models.Investigador, error) {
 	var inv models.Investigador
-	err := db.QueryRow(`SELECT id_investigador, nombre, apellido, rol FROM investigador WHERE id_investigador = $1`, id).Scan(&inv.ID, &inv.Nombre, &inv.Apellido, &inv.Rol)
+	err := db.QueryRow(`SELECT idInvestigador, nombre, apellido, createdAt, updatedAt FROM investigador WHERE idInvestigador = $1`, id).Scan(&inv.ID, &inv.Nombre, &inv.Apellido, &inv.CreatedAt, &inv.UpdatedAt)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil // Return nil for both when not found
@@ -46,8 +46,8 @@ func GetInvestigadorByID(db *sql.DB, id int) (*models.Investigador, error) {
 
 // CreateInvestigador inserts a new investigator into the database.
 func CreateInvestigador(db *sql.DB, inv *models.Investigador) error {
-	query := `INSERT INTO investigador (nombre, apellido, rol) VALUES ($1, $2, $3) RETURNING id_investigador`
-	err := db.QueryRow(query, inv.Nombre, inv.Apellido, inv.Rol).Scan(&inv.ID)
+	query := `INSERT INTO investigador (nombre, apellido) VALUES ($1, $2) RETURNING idInvestigador, createdAt, updatedAt`
+	err := db.QueryRow(query, inv.Nombre, inv.Apellido).Scan(&inv.ID, &inv.CreatedAt, &inv.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("error inserting investigator: %w", err)
 	}
@@ -56,7 +56,7 @@ func CreateInvestigador(db *sql.DB, inv *models.Investigador) error {
 
 // UpdateInvestigador updates an existing investigator in the database.
 func UpdateInvestigador(db *sql.DB, inv *models.Investigador) error {
-	_, err := db.Exec(`UPDATE investigador SET nombre = $1, apellido = $2, rol = $3 WHERE id_investigador = $4`, inv.Nombre, inv.Apellido, inv.Rol, inv.ID)
+	_, err := db.Exec(`UPDATE investigador SET nombre = $1, apellido = $2, updatedAt = CURRENT_TIMESTAMP WHERE idInvestigador = $3`, inv.Nombre, inv.Apellido, inv.ID)
 	if err != nil {
 		return fmt.Errorf("error updating investigator: %w", err)
 	}
@@ -65,7 +65,7 @@ func UpdateInvestigador(db *sql.DB, inv *models.Investigador) error {
 
 // DeleteInvestigador deletes an investigator from the database.
 func DeleteInvestigador(db *sql.DB, id int) error {
-	_, err := db.Exec(`DELETE FROM investigador WHERE id_investigador = $1`, id)
+	_, err := db.Exec(`DELETE FROM investigador WHERE idInvestigador = $1`, id)
 	if err != nil {
 		return fmt.Errorf("error deleting investigator: %w", err)
 	}
@@ -74,7 +74,7 @@ func DeleteInvestigador(db *sql.DB, id int) error {
 
 // SearchInvestigadores searches for investigators based on optional criteria.
 func SearchInvestigadores(db *sql.DB, name string) ([]models.Investigador, error) {
-	query := `SELECT id_investigador, nombre, apellido, rol FROM investigador WHERE 1=1`
+	query := `SELECT idInvestigador, nombre, apellido, createdAt, updatedAt FROM investigador WHERE 1=1`
 	args := []interface{}{}
 	placeholderCount := 1
 
@@ -94,7 +94,7 @@ func SearchInvestigadores(db *sql.DB, name string) ([]models.Investigador, error
 	investigadores := []models.Investigador{}
 	for rows.Next() {
 		var inv models.Investigador
-		if err := rows.Scan(&inv.ID, &inv.Nombre, &inv.Apellido, &inv.Rol); err != nil {
+		if err := rows.Scan(&inv.ID, &inv.Nombre, &inv.Apellido, &inv.CreatedAt, &inv.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("error scanning investigator row during search: %w", err)
 		}
 		investigadores = append(investigadores, inv)

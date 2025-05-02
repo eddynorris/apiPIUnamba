@@ -1,38 +1,33 @@
--- Tabla Investigador
--- Nombres en minúscula y snake_case
-CREATE TABLE investigador (
-    id_investigador SERIAL PRIMARY KEY,
+-- Table: Investigador (Researchers)
+CREATE TABLE Investigador (
+    idInvestigador SERIAL PRIMARY KEY, -- SERIAL is PostgreSQL's auto-incrementing integer
     nombre VARCHAR(100) NOT NULL,
     apellido VARCHAR(100) NOT NULL,
-    rol VARCHAR(100) NOT NULL
+    createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updatedAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP -- Sets timestamp on creation only
 );
 
--- Tabla Grupos de Investigación
-CREATE TABLE grupo (
-    id_grupo SERIAL PRIMARY KEY,
+-- Table: Grupo (Research Groups)
+CREATE TABLE Grupo (
+    idGrupo SERIAL PRIMARY KEY,
     nombre VARCHAR(150) NOT NULL,
-    numero_resolucion VARCHAR(100) NOT NULL,
-    linea_investigacion VARCHAR(200) NOT NULL,
-    tipo_investigacion VARCHAR(100) NOT NULL,
-    fecha_registro DATE NOT NULL,
-    archivo VARCHAR(255) -- Puede ser NULL si no siempre hay archivo
+    numeroResolucion VARCHAR(100) NOT NULL,
+    lineaInvestigacion VARCHAR(200) NOT NULL,
+    tipoInvestigacion VARCHAR(100) NOT NULL,
+    fechaRegistro DATE NOT NULL,
+    archivo VARCHAR(255), -- Assuming this stores a file path or name
+    createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updatedAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP -- Sets timestamp on creation only
 );
 
--- Tabla Detalle_Grupo de Investigadores
-CREATE TABLE detalle_grupo_investigador (
-    id_detalle_gi SERIAL PRIMARY KEY,
-    id_grupo INT NOT NULL,
-    id_investigador INT NOT NULL,
-    tipo_relacion VARCHAR(100) NOT NULL,
-    -- Las referencias FOREIGN KEY también usan nombres en minúsculas
-    FOREIGN KEY (id_grupo) REFERENCES grupo(id_grupo) ON DELETE CASCADE,
-    FOREIGN KEY (id_investigador) REFERENCES investigador(id_investigador) ON DELETE CASCADE
+-- Table: Grupo_Investigador (Associative table for Groups and Researchers)
+CREATE TABLE Grupo_Investigador (
+    idGrupo_Investigador SERIAL PRIMARY KEY,
+    idGrupo INT NOT NULL,
+    idInvestigador INT NOT NULL,
+    rol VARCHAR(50) NOT NULL, -- e.g., 'Coordinador' or 'Integrante'
+    createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updatedAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP, -- Sets timestamp on creation only
+    FOREIGN KEY (idGrupo) REFERENCES Grupo(idGrupo) ON DELETE CASCADE,
+    FOREIGN KEY (idInvestigador) REFERENCES Investigador(idInvestigador) ON DELETE CASCADE
 );
-
--- Example INSERT statement (nombres de columna en minúscula)
--- Nota: No insertamos los IDs seriales, PostgreSQL los genera.
-INSERT INTO investigador (nombre, apellido, rol) VALUES ('John', 'Doe', 'Professor');
-
--- Ejemplo asumiendo que los primeros IDs serán 1:
-INSERT INTO grupo (nombre, numero_resolucion, linea_investigacion, tipo_investigacion, fecha_registro, archivo) VALUES ('Research Group 1', 'Res-2023-001', 'AI in Education', 'Applied', '2023-01-15', '/files/research_group_1_resolution.pdf');
-INSERT INTO detalle_grupo_investigador (id_grupo, id_investigador, tipo_relacion) VALUES (1, 1, 'coordinator');

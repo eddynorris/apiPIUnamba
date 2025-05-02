@@ -1,4 +1,4 @@
-package handlers
+package controllers
 
 import (
 	"database/sql"
@@ -224,7 +224,7 @@ func CreateGrupoWithDetailsHandler(db *sql.DB) http.HandlerFunc {
 		// Create the group within the transaction using QueryRow with RETURNING
 		grupoToCreate := requestBody.Grupo
 		// Use lowercase snake_case names and $n placeholders
-		groupInsertQuery := `INSERT INTO grupo (nombre, numero_resolucion, linea_investigacion, tipo_investigacion, fecha_registro, archivo) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id_grupo`
+		groupInsertQuery := `INSERT INTO grupo (nombre, numero_resolucion, linea_investigacion, tipo_investigacion, fecha_registro, archivo) VALUES ($1, $2, $3, $4, $5, $6) RETURNING idGrupo`
 		var grupoID int64 // Use int64 for Scan with RETURNING
 
 		err = tx.QueryRow(groupInsertQuery, grupoToCreate.Nombre, grupoToCreate.NumeroResolucion, grupoToCreate.LineaInvestigacion, grupoToCreate.TipoInvestigacion, grupoToCreate.FechaRegistro, grupoToCreate.Archivo).Scan(&grupoID)
@@ -237,7 +237,7 @@ func CreateGrupoWithDetailsHandler(db *sql.DB) http.HandlerFunc {
 
 		// Create the detailed relationships within the transaction using Exec
 		// Use lowercase snake_case names and $n placeholders
-		detailInsertQuery := `INSERT INTO detalle_grupo_investigador (id_grupo, id_investigador, tipo_relacion) VALUES ($1, $2, $3)`
+		detailInsertQuery := `INSERT INTO detalle_grupo_investigador (idGrupo, idInvestigador, tipo_relacion) VALUES ($1, $2, $3)`
 		for _, invRel := range requestBody.Investigadores {
 			_, err = tx.Exec(detailInsertQuery, grupoID, invRel.IDInvestigador, invRel.TipoRelacion)
 			if err != nil {
