@@ -20,15 +20,20 @@ func GetGruposHandler(db *sql.DB) http.HandlerFunc {
 		year := r.URL.Query().Get("año") // Assuming 'año' is the query parameter for year
 		lineaInvestigacion := r.URL.Query().Get("lineaInvestigacion")
 
-		var grupos []models.Grupo
+		// Define result variable as interface{} to hold either type
+		var result interface{}
 		var err error
 
 		if groupName != "" || investigatorName != "" || year != "" || lineaInvestigacion != "" {
-			// Perform search if any query parameter is provided
-			grupos, err = repository.SearchGrupos(db, groupName, investigatorName, year, lineaInvestigacion)
+			// Perform search: returns groups with investigators and roles
+			var gruposConDetalles []models.GrupoWithInvestigadores
+			gruposConDetalles, err = repository.SearchGrupos(db, groupName, investigatorName, year, lineaInvestigacion)
+			result = gruposConDetalles // Assign to interface{}
 		} else {
-			// Otherwise, get all groups
-			grupos, err = repository.GetAllGrupos(db)
+			// Get all groups (simple list)
+			var gruposSimples []models.Grupo
+			gruposSimples, err = repository.GetAllGrupos(db)
+			result = gruposSimples // Assign to interface{}
 		}
 
 		if err != nil {
@@ -38,7 +43,8 @@ func GetGruposHandler(db *sql.DB) http.HandlerFunc {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(grupos)
+		// Encode the result (which could be either []Grupo or []GrupoWithInvestigadores)
+		json.NewEncoder(w).Encode(result)
 	}
 }
 
@@ -75,9 +81,23 @@ func CreateGrupoHandler(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var g models.Grupo
 		if err := json.NewDecoder(r.Body).Decode(&g); err != nil {
-			http.Error(w, "Invalid request body", http.StatusBadRequest)
+			// log.Printf("Error decoding grupo JSON: %v", err)
+			http.Error(w, "Invalid request body format", http.StatusBadRequest)
 			return
 		}
+
+		// --- VALIDACIÓN ---
+		// Check required string fields
+		if g.Nombre == "" || g.NumeroResolucion == "" || g.LineaInvestigacion == "" || g.TipoInvestigacion == "" {
+			http.Error(w, "Missing required fields: nombre, numeroResolucion, lineaInvestigacion, tipoInvestigacion", http.StatusBadRequest)
+			return
+		}
+		// Check if FechaRegistro is the zero value for time.Time
+		if g.FechaRegistro.IsZero() {
+			http.Error(w, "Missing required field: fechaRegistro", http.StatusBadRequest)
+			return
+		}
+		// --- FIN VALIDACIÓN ---
 
 		if err := repository.CreateGrupo(db, &g); err != nil {
 			log.Printf("Error creating group: %v", err)

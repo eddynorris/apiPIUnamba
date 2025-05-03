@@ -72,9 +72,18 @@ func CreateInvestigadorHandler(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var inv models.Investigador
 		if err := json.NewDecoder(r.Body).Decode(&inv); err != nil {
-			http.Error(w, "Invalid request body", http.StatusBadRequest)
+			// Consider logging the actual error for debugging
+			// log.Printf("Error decoding investigator JSON: %v", err)
+			http.Error(w, "Invalid request body format", http.StatusBadRequest)
 			return
 		}
+
+		// --- VALIDACIÓN ---
+		if inv.Nombre == "" || inv.Apellido == "" {
+			http.Error(w, "Missing required fields: nombre and apellido", http.StatusBadRequest)
+			return
+		}
+		// --- FIN VALIDACIÓN ---
 
 		if err := repository.CreateInvestigador(db, &inv); err != nil {
 			log.Printf("Error creating investigator: %v", err)

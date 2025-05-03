@@ -15,8 +15,8 @@ type Grupo struct {
 	UpdatedAt          time.Time `json:"updatedAt" db:"updatedAt"`
 }
 
-// GrupoWithInvestigadores represents a group with its associated investigators.
+// GrupoWithInvestigadores represents a group with its associated investigators including their roles.
 type GrupoWithInvestigadores struct {
-	Grupo          Grupo          `json:"grupo"`
-	Investigadores []Investigador `json:"investigadores"`
+	Grupo          Grupo                `json:"grupo"`
+	Investigadores []InvestigadorConRol `json:"investigadores"`
 }
