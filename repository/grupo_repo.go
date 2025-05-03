@@ -4,14 +4,17 @@ import (
 	"database/sql"
 	"fmt"
 
+	// Import math for ceiling calculation
 	"github.com/GoogleCloudPlatform/golang-samples/run/helloworld/models"
 )
 
-// GetAllGrupos retrieves all groups from the database.
-func GetAllGrupos(db *sql.DB) ([]models.Grupo, error) {
-	rows, err := db.Query(`SELECT idGrupo, nombre, numeroResolucion, lineaInvestigacion, tipoInvestigacion, fechaRegistro, archivo, createdAt, updatedAt FROM grupo`)
+// GetAllGrupos retrieves a paginated list of all groups.
+func GetAllGrupos(db *sql.DB, limit, offset int) ([]models.Grupo, int, error) {
+	// Query for the data page
+	query := `SELECT idGrupo, nombre, numeroResolucion, lineaInvestigacion, tipoInvestigacion, fechaRegistro, archivo, createdAt, updatedAt FROM grupo ORDER BY nombre LIMIT $1 OFFSET $2`
+	rows, err := db.Query(query, limit, offset)
 	if err != nil {
-		return nil, fmt.Errorf("error querying groups: %w", err)
+		return nil, 0, fmt.Errorf("error querying groups page: %w", err)
 	}
 	defer rows.Close()
 
@@ -19,16 +22,22 @@ func GetAllGrupos(db *sql.DB) ([]models.Grupo, error) {
 	for rows.Next() {
 		var g models.Grupo
 		if err := rows.Scan(&g.ID, &g.Nombre, &g.NumeroResolucion, &g.LineaInvestigacion, &g.TipoInvestigacion, &g.FechaRegistro, &g.Archivo, &g.CreatedAt, &g.UpdatedAt); err != nil {
-			return nil, fmt.Errorf("error scanning group row: %w", err)
+			return nil, 0, fmt.Errorf("error scanning group row: %w", err)
 		}
 		grupos = append(grupos, g)
 	}
-
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("error after iterating through group rows: %w", err)
+		return nil, 0, fmt.Errorf("error after iterating through group rows: %w", err)
 	}
 
-	return grupos, nil
+	// Query for the total count
+	var total int
+	countQuery := `SELECT COUNT(*) FROM grupo`
+	if err := db.QueryRow(countQuery).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("error querying total group count: %w", err)
+	}
+
+	return grupos, total, nil
 }
 
 // GetGrupoByID retrieves a single group by its ID.
@@ -72,29 +81,24 @@ func DeleteGrupo(db *sql.DB, id int) error {
 	return nil
 }
 
-// SearchGrupos searches for groups based on optional criteria and returns them with their investigators and roles.
-// Returns []models.GrupoWithInvestigadores
-func SearchGrupos(db *sql.DB, groupName, investigatorName, year, lineaInvestigacion string) ([]models.GrupoWithInvestigadores, error) {
-	// Query needs to select fields from grupo, investigador, and the linking table (Grupo_Investigador)
-	// No DISTINCT needed here, we group in Go. ORDER BY g.idGrupo is helpful.
+// SearchGrupos searches for groups with pagination and returns them with investigators and roles.
+func SearchGrupos(db *sql.DB, groupName, investigatorName, year, lineaInvestigacion, tipoInvestigacion string, limit, offset int) ([]models.GrupoWithInvestigadores, int, error) {
 	args := []interface{}{}
 	placeholderCount := 1
 
-	// --- Build WHERE clause dynamically ---
+	// --- Build WHERE clause dynamically (for the CTE) ---
 	whereConditions := ""
 
 	if groupName != "" {
-		whereConditions += fmt.Sprintf(` AND g.nombre ILIKE $%d`, placeholderCount)
+		// Apply unaccent to both column and search term
+		whereConditions += fmt.Sprintf(` AND unaccent(g.nombre) ILIKE unaccent($%d)`, placeholderCount)
 		args = append(args, "%"+groupName+"%")
 		placeholderCount++
 	}
 
 	if investigatorName != "" {
-		// Important: This condition needs to be applied correctly. We might get multiple rows for the same group if different investigators match.
-		// This WHERE clause will filter the *rows* returned, not necessarily limit the groups to *only* those containing the matching investigator.
-		// To strictly filter groups *containing* the investigator, a subquery or EXISTS might be needed, making the query more complex.
-		// For now, we filter the rows and reconstruct.
-		whereConditions += fmt.Sprintf(` AND (i.nombre ILIKE $%d OR i.apellido ILIKE $%d)`, placeholderCount, placeholderCount+1)
+		// Apply unaccent to both column and search term
+		whereConditions += fmt.Sprintf(` AND (unaccent(i.nombre) ILIKE unaccent($%d) OR unaccent(i.apellido) ILIKE unaccent($%d))`, placeholderCount, placeholderCount+1)
 		args = append(args, "%"+investigatorName+"%", "%"+investigatorName+"%")
 		placeholderCount += 2
 	}
@@ -106,21 +110,31 @@ func SearchGrupos(db *sql.DB, groupName, investigatorName, year, lineaInvestigac
 	}
 
 	if lineaInvestigacion != "" {
-		whereConditions += fmt.Sprintf(` AND g.lineaInvestigacion ILIKE $%d`, placeholderCount)
+		// Apply unaccent to both column and search term
+		whereConditions += fmt.Sprintf(` AND unaccent(g.lineaInvestigacion) ILIKE unaccent($%d)`, placeholderCount)
 		args = append(args, "%"+lineaInvestigacion+"%")
+		placeholderCount++
+	}
+
+	if tipoInvestigacion != "" {
+		// Apply unaccent to both column and search term
+		whereConditions += fmt.Sprintf(` AND unaccent(g.tipoInvestigacion) ILIKE unaccent($%d)`, placeholderCount)
+		args = append(args, "%"+tipoInvestigacion+"%")
 		placeholderCount++
 	}
 	// --- End WHERE clause build ---
 
-	// We need to find the groups that match the criteria first, then get their details.
-	// A more robust approach uses a subquery to filter groups first.
-	finalQuery := `WITH FilteredGroups AS (
+	// CTE to find matching group IDs based on filters
+	cteQuery := `WITH FilteredGroups AS (
 		SELECT DISTINCT g.idGrupo
 		FROM grupo g
 		LEFT JOIN Grupo_Investigador dgi ON g.idGrupo = dgi.idGrupo
 		LEFT JOIN investigador i ON dgi.idInvestigador = i.idInvestigador
 		WHERE 1=1` + whereConditions + `
-	)
+	)`
+
+	// Query for the data page using the CTE
+	dataQuery := cteQuery + fmt.Sprintf(`
 	SELECT
 		g.idGrupo, g.nombre, g.numeroResolucion, g.lineaInvestigacion, g.tipoInvestigacion, g.fechaRegistro, g.archivo, g.createdAt, g.updatedAt,
 		i.idInvestigador, i.nombre, i.apellido, i.createdAt as invCreatedAt, i.updatedAt as invUpdatedAt,
@@ -129,12 +143,13 @@ func SearchGrupos(db *sql.DB, groupName, investigatorName, year, lineaInvestigac
 	JOIN Grupo_Investigador dgi ON g.idGrupo = dgi.idGrupo
 	JOIN investigador i ON dgi.idInvestigador = i.idInvestigador
 	WHERE g.idGrupo IN (SELECT idGrupo FROM FilteredGroups)
-	ORDER BY g.idGrupo, i.idInvestigador -- Order to help grouping in Go
-	`
+	ORDER BY g.idGrupo, i.idInvestigador
+	LIMIT $%d OFFSET $%d`, placeholderCount, placeholderCount+1)
 
-	rows, err := db.Query(finalQuery, args...)
+	finalArgs := append(args, limit, offset)
+	rows, err := db.Query(dataQuery, finalArgs...)
 	if err != nil {
-		return nil, fmt.Errorf("error searching groups with details: %w", err)
+		return nil, 0, fmt.Errorf("error searching groups page with details: %w", err)
 	}
 	defer rows.Close()
 
@@ -153,7 +168,7 @@ func SearchGrupos(db *sql.DB, groupName, investigatorName, year, lineaInvestigac
 			&inv.ID, &inv.Nombre, &inv.Apellido, &invCreatedAt, &invUpdatedAt,
 			&inv.Rol,
 		); err != nil {
-			return nil, fmt.Errorf("error scanning group/investigator row during search: %w", err)
+			return nil, 0, fmt.Errorf("error scanning group/investigator row during search: %w", err)
 		}
 
 		// Handle potentially null timestamps for investigator
@@ -180,7 +195,14 @@ func SearchGrupos(db *sql.DB, groupName, investigatorName, year, lineaInvestigac
 	}
 
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("error after iterating through group search rows: %w", err)
+		return nil, 0, fmt.Errorf("error after iterating through group search rows: %w", err)
+	}
+
+	// Query for the total count using the CTE
+	var total int
+	countQuery := cteQuery + ` SELECT COUNT(*) FROM FilteredGroups`
+	if err := db.QueryRow(countQuery, args...).Scan(&total); err != nil { // Use original args for count
+		return nil, 0, fmt.Errorf("error searching total group count: %w", err)
 	}
 
 	// Convert []*models.GrupoWithInvestigadores to []models.GrupoWithInvestigadores
@@ -189,7 +211,7 @@ func SearchGrupos(db *sql.DB, groupName, investigatorName, year, lineaInvestigac
 		result[i] = *ptr
 	}
 
-	return result, nil
+	return result, total, nil
 }
 
 // GetGrupoDetails retrieves a group and its associated investigators including their roles.

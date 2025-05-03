@@ -4,36 +4,47 @@ import (
 	"database/sql"
 	"encoding/json"
 	"log"
+	"math"
 	"net/http"
 	"strconv"
 
 	"github.com/GoogleCloudPlatform/golang-samples/run/helloworld/models"
 	"github.com/GoogleCloudPlatform/golang-samples/run/helloworld/repository"
+	"github.com/GoogleCloudPlatform/golang-samples/run/helloworld/utils"
 	"github.com/gorilla/mux"
 )
 
-// GetGruposHandler handles fetching all groups or searching based on criteria.
+// GetGruposHandler handles fetching all groups or searching based on criteria with pagination.
 func GetGruposHandler(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		// Read search params
 		groupName := r.URL.Query().Get("grupo")
 		investigatorName := r.URL.Query().Get("investigador")
-		year := r.URL.Query().Get("año") // Assuming 'año' is the query parameter for year
+		year := r.URL.Query().Get("año")
 		lineaInvestigacion := r.URL.Query().Get("lineaInvestigacion")
+		tipoInvestigacion := r.URL.Query().Get("tipoInvestigacion")
 
-		// Define result variable as interface{} to hold either type
-		var result interface{}
+		// Read pagination params
+		page, limit := utils.GetPaginationParams(r)
+		offset := (page - 1) * limit
+
+		var data interface{} // Holds either []Grupo or []GrupoWithInvestigadores
+		var totalItems int
 		var err error
 
-		if groupName != "" || investigatorName != "" || year != "" || lineaInvestigacion != "" {
+		// Check if *any* search parameter is provided
+		isSearch := groupName != "" || investigatorName != "" || year != "" || lineaInvestigacion != "" || tipoInvestigacion != ""
+
+		if isSearch {
 			// Perform search: returns groups with investigators and roles
 			var gruposConDetalles []models.GrupoWithInvestigadores
-			gruposConDetalles, err = repository.SearchGrupos(db, groupName, investigatorName, year, lineaInvestigacion)
-			result = gruposConDetalles // Assign to interface{}
+			gruposConDetalles, totalItems, err = repository.SearchGrupos(db, groupName, investigatorName, year, lineaInvestigacion, tipoInvestigacion, limit, offset)
+			data = gruposConDetalles
 		} else {
 			// Get all groups (simple list)
 			var gruposSimples []models.Grupo
-			gruposSimples, err = repository.GetAllGrupos(db)
-			result = gruposSimples // Assign to interface{}
+			gruposSimples, totalItems, err = repository.GetAllGrupos(db, limit, offset)
+			data = gruposSimples
 		}
 
 		if err != nil {
@@ -42,9 +53,26 @@ func GetGruposHandler(db *sql.DB) http.HandlerFunc {
 			return
 		}
 
+		// Calculate pagination metadata
+		totalPages := 0
+		if totalItems > 0 {
+			totalPages = int(math.Ceil(float64(totalItems) / float64(limit)))
+		}
+		pagination := models.PaginationMetadata{
+			TotalItems:  totalItems,
+			TotalPages:  totalPages,
+			CurrentPage: page,
+			Limit:       limit,
+		}
+
+		// Create paginated response
+		response := models.PaginatedResponse{
+			Data:       data,
+			Pagination: pagination,
+		}
+
 		w.Header().Set("Content-Type", "application/json")
-		// Encode the result (which could be either []Grupo or []GrupoWithInvestigadores)
-		json.NewEncoder(w).Encode(result)
+		json.NewEncoder(w).Encode(response)
 	}
 }
 

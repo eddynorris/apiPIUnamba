@@ -3,15 +3,18 @@ package repository
 import (
 	"database/sql"
 	"fmt"
+	"strings" // Import strings for query building
 
 	"github.com/GoogleCloudPlatform/golang-samples/run/helloworld/models"
 )
 
-// GetAllInvestigadores retrieves all investigators from the database.
-func GetAllInvestigadores(db *sql.DB) ([]models.Investigador, error) {
-	rows, err := db.Query(`SELECT idInvestigador, nombre, apellido, createdAt, updatedAt FROM investigador`)
+// GetAllInvestigadores retrieves a paginated list of all investigators.
+func GetAllInvestigadores(db *sql.DB, limit, offset int) ([]models.Investigador, int, error) {
+	// Query for the data page
+	query := `SELECT idInvestigador, nombre, apellido, createdAt, updatedAt FROM investigador ORDER BY nombre, apellido LIMIT $1 OFFSET $2`
+	rows, err := db.Query(query, limit, offset)
 	if err != nil {
-		return nil, fmt.Errorf("error querying investigators: %w", err)
+		return nil, 0, fmt.Errorf("error querying investigators page: %w", err)
 	}
 	defer rows.Close()
 
@@ -19,16 +22,22 @@ func GetAllInvestigadores(db *sql.DB) ([]models.Investigador, error) {
 	for rows.Next() {
 		var inv models.Investigador
 		if err := rows.Scan(&inv.ID, &inv.Nombre, &inv.Apellido, &inv.CreatedAt, &inv.UpdatedAt); err != nil {
-			return nil, fmt.Errorf("error scanning investigator row: %w", err)
+			return nil, 0, fmt.Errorf("error scanning investigator row: %w", err)
 		}
 		investigadores = append(investigadores, inv)
 	}
-
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("error after iterating through investigator rows: %w", err)
+		return nil, 0, fmt.Errorf("error after iterating through investigator rows: %w", err)
 	}
 
-	return investigadores, nil
+	// Query for the total count
+	var total int
+	countQuery := `SELECT COUNT(*) FROM investigador`
+	if err := db.QueryRow(countQuery).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("error querying total investigator count: %w", err)
+	}
+
+	return investigadores, total, nil
 }
 
 // GetInvestigadorByID retrieves a single investigator by their ID.
@@ -72,22 +81,32 @@ func DeleteInvestigador(db *sql.DB, id int) error {
 	return nil
 }
 
-// SearchInvestigadores searches for investigators based on optional criteria.
-func SearchInvestigadores(db *sql.DB, name string) ([]models.Investigador, error) {
-	query := `SELECT idInvestigador, nombre, apellido, createdAt, updatedAt FROM investigador WHERE 1=1`
+// SearchInvestigadores searches for investigators with pagination.
+func SearchInvestigadores(db *sql.DB, name string, limit, offset int) ([]models.Investigador, int, error) {
+	// Base query and conditions
+	baseQuery := `FROM investigador WHERE 1=1`
+	var conditions []string
 	args := []interface{}{}
 	placeholderCount := 1
 
 	if name != "" {
-		query += fmt.Sprintf(` AND (nombre ILIKE $%d OR apellido ILIKE $%d)`, placeholderCount, placeholderCount+1)
+		conditions = append(conditions, fmt.Sprintf(`(unaccent(nombre) ILIKE unaccent($%d) OR unaccent(apellido) ILIKE unaccent($%d))`, placeholderCount, placeholderCount+1))
 		searchPattern := "%" + name + "%"
 		args = append(args, searchPattern, searchPattern)
-		placeholderCount += 2 // Increment by 2 because we added two placeholders
+		placeholderCount += 2
 	}
 
-	rows, err := db.Query(query, args...)
+	whereClause := ""
+	if len(conditions) > 0 {
+		whereClause = " AND " + strings.Join(conditions, " AND ")
+	}
+
+	// Query for the data page
+	query := fmt.Sprintf(`SELECT idInvestigador, nombre, apellido, createdAt, updatedAt %s %s ORDER BY nombre, apellido LIMIT $%d OFFSET $%d`, baseQuery, whereClause, placeholderCount, placeholderCount+1)
+	finalArgs := append(args, limit, offset)
+	rows, err := db.Query(query, finalArgs...)
 	if err != nil {
-		return nil, fmt.Errorf("error searching investigators: %w", err)
+		return nil, 0, fmt.Errorf("error searching investigators page: %w", err)
 	}
 	defer rows.Close()
 
@@ -95,14 +114,20 @@ func SearchInvestigadores(db *sql.DB, name string) ([]models.Investigador, error
 	for rows.Next() {
 		var inv models.Investigador
 		if err := rows.Scan(&inv.ID, &inv.Nombre, &inv.Apellido, &inv.CreatedAt, &inv.UpdatedAt); err != nil {
-			return nil, fmt.Errorf("error scanning investigator row during search: %w", err)
+			return nil, 0, fmt.Errorf("error scanning investigator row during search: %w", err)
 		}
 		investigadores = append(investigadores, inv)
 	}
-
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("error after iterating through investigator search rows: %w", err)
+		return nil, 0, fmt.Errorf("error after iterating through investigator search rows: %w", err)
 	}
 
-	return investigadores, nil
+	// Query for the total count with the same filters
+	var total int
+	countQuery := fmt.Sprintf(`SELECT COUNT(*) %s %s`, baseQuery, whereClause)
+	if err := db.QueryRow(countQuery, args...).Scan(&total); err != nil { // Use original args for count
+		return nil, 0, fmt.Errorf("error searching total investigator count: %w", err)
+	}
+
+	return investigadores, total, nil
 }

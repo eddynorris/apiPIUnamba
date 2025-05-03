@@ -4,28 +4,31 @@ import (
 	"database/sql"
 	"encoding/json"
 	"log"
+	"math"
 	"net/http"
 	"strconv"
 
 	"github.com/GoogleCloudPlatform/golang-samples/run/helloworld/models"
 	"github.com/GoogleCloudPlatform/golang-samples/run/helloworld/repository"
+	"github.com/GoogleCloudPlatform/golang-samples/run/helloworld/utils"
 	"github.com/gorilla/mux"
 )
 
-// GetInvestigadoresHandler handles fetching all investigators or searching by name.
+// GetInvestigadoresHandler handles fetching all investigators or searching by name with pagination.
 func GetInvestigadoresHandler(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		name := r.URL.Query().Get("name") // Assuming 'name' is the query parameter for investigator name
+		name := r.URL.Query().Get("name")
+		page, limit := utils.GetPaginationParams(r)
+		offset := (page - 1) * limit
 
 		var investigadores []models.Investigador
+		var totalItems int
 		var err error
 
 		if name != "" {
-			// Perform search if name parameter is provided
-			investigadores, err = repository.SearchInvestigadores(db, name)
+			investigadores, totalItems, err = repository.SearchInvestigadores(db, name, limit, offset)
 		} else {
-			// Otherwise, get all investigators
-			investigadores, err = repository.GetAllInvestigadores(db)
+			investigadores, totalItems, err = repository.GetAllInvestigadores(db, limit, offset)
 		}
 
 		if err != nil {
@@ -34,8 +37,26 @@ func GetInvestigadoresHandler(db *sql.DB) http.HandlerFunc {
 			return
 		}
 
+		// Calculate pagination metadata
+		totalPages := 0
+		if totalItems > 0 {
+			totalPages = int(math.Ceil(float64(totalItems) / float64(limit)))
+		}
+		pagination := models.PaginationMetadata{
+			TotalItems:  totalItems,
+			TotalPages:  totalPages,
+			CurrentPage: page,
+			Limit:       limit,
+		}
+
+		// Create paginated response
+		response := models.PaginatedResponse{
+			Data:       investigadores,
+			Pagination: pagination,
+		}
+
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(investigadores)
+		json.NewEncoder(w).Encode(response)
 	}
 }
 
