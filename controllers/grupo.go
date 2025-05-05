@@ -3,16 +3,84 @@ package controllers
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
+	"io"
 	"log"
 	"math"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
+	"time"
 
 	"github.com/GoogleCloudPlatform/golang-samples/run/helloworld/models"
 	"github.com/GoogleCloudPlatform/golang-samples/run/helloworld/repository"
 	"github.com/GoogleCloudPlatform/golang-samples/run/helloworld/utils"
 	"github.com/gorilla/mux"
 )
+
+const (
+	uploadDir     = "uploads"
+	maxUploadSize = 10 * 1024 * 1024
+	timeFormat    = "2006-01-02"
+)
+
+// Helper function to save uploaded file
+func saveUploadedFile(r *http.Request, formKey string) (*string, error) {
+	err := r.ParseMultipartForm(maxUploadSize)
+	if err != nil {
+		if err == http.ErrNotMultipart || err == http.ErrMissingFile {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("error parsing multipart form: %w", err)
+	}
+
+	file, handler, err := r.FormFile(formKey)
+	if err != nil {
+		if err == http.ErrMissingFile {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("error retrieving file '%s': %w", formKey, err)
+	}
+	defer file.Close()
+
+	originalFilename := filepath.Base(handler.Filename)
+	safeFilename := strings.ReplaceAll(originalFilename, "..", "")
+	uniqueFilename := fmt.Sprintf("%d_%s", time.Now().UnixNano(), safeFilename)
+
+	err = os.MkdirAll(uploadDir, os.ModePerm)
+	if err != nil {
+		return nil, fmt.Errorf("error creating upload directory: %w", err)
+	}
+
+	filePath := filepath.Join(uploadDir, uniqueFilename)
+	dst, err := os.Create(filePath)
+	if err != nil {
+		return nil, fmt.Errorf("error creating destination file: %w", err)
+	}
+	defer dst.Close()
+
+	_, err = io.Copy(dst, file)
+	if err != nil {
+		os.Remove(filePath)
+		return nil, fmt.Errorf("error copying uploaded file: %w", err)
+	}
+
+	relativePath := filepath.ToSlash(filePath)
+	return &relativePath, nil
+}
+
+func removeFile(relativePath *string) error {
+	if relativePath == nil || *relativePath == "" {
+		return nil
+	}
+	err := os.Remove(*relativePath)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("error removing file '%s': %w", *relativePath, err)
+	}
+	return nil
+}
 
 // GetGruposHandler handles fetching all groups or searching based on criteria with pagination.
 func GetGruposHandler(db *sql.DB) http.HandlerFunc {
@@ -104,32 +172,55 @@ func GetGrupoHandler(db *sql.DB) http.HandlerFunc {
 	}
 }
 
-// CreateGrupoHandler handles creating a new group.
+// CreateGrupoHandler handles creating a new group with potential file upload.
+// Expects multipart/form-data
 func CreateGrupoHandler(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		var g models.Grupo
-		if err := json.NewDecoder(r.Body).Decode(&g); err != nil {
-			// log.Printf("Error decoding grupo JSON: %v", err)
-			http.Error(w, "Invalid request body format", http.StatusBadRequest)
+		filePath, err := saveUploadedFile(r, "archivo")
+		if err != nil {
+			log.Printf("Error saving uploaded file during group creation: %v", err)
+			if strings.Contains(err.Error(), "parsing multipart form") || strings.Contains(err.Error(), "request body too large") {
+				http.Error(w, fmt.Sprintf("Error processing form: %v", err), http.StatusBadRequest)
+			} else {
+				http.Error(w, "Internal server error processing file upload", http.StatusInternalServerError)
+			}
 			return
 		}
 
-		// --- VALIDACIÓN ---
-		// Check required string fields
+		var g models.Grupo
+		g.Nombre = r.FormValue("nombre")
+		g.NumeroResolucion = r.FormValue("numeroResolucion")
+		g.LineaInvestigacion = r.FormValue("lineaInvestigacion")
+		g.TipoInvestigacion = r.FormValue("tipoInvestigacion")
+
+		fechaStr := r.FormValue("fechaRegistro")
+		if fechaStr != "" {
+			parsedDate, err := time.Parse(timeFormat, fechaStr)
+			if err != nil {
+				_ = removeFile(filePath)
+				http.Error(w, fmt.Sprintf("Invalid format for fechaRegistro. Use %s", timeFormat), http.StatusBadRequest)
+				return
+			}
+			g.FechaRegistro = parsedDate
+		}
+
 		if g.Nombre == "" || g.NumeroResolucion == "" || g.LineaInvestigacion == "" || g.TipoInvestigacion == "" {
-			http.Error(w, "Missing required fields: nombre, numeroResolucion, lineaInvestigacion, tipoInvestigacion", http.StatusBadRequest)
+			_ = removeFile(filePath)
+			http.Error(w, "Missing required text fields: nombre, numeroResolucion, lineaInvestigacion, tipoInvestigacion", http.StatusBadRequest)
 			return
 		}
-		// Check if FechaRegistro is the zero value for time.Time
 		if g.FechaRegistro.IsZero() {
-			http.Error(w, "Missing required field: fechaRegistro", http.StatusBadRequest)
+			_ = removeFile(filePath)
+			http.Error(w, fmt.Sprintf("Missing or invalid required field: fechaRegistro (use format %s)", timeFormat), http.StatusBadRequest)
 			return
 		}
-		// --- FIN VALIDACIÓN ---
+
+		g.Archivo = filePath
 
 		if err := repository.CreateGrupo(db, &g); err != nil {
-			log.Printf("Error creating group: %v", err)
-			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			log.Printf("Error creating group in repository: %v", err)
+			_ = removeFile(filePath)
+			http.Error(w, "Internal server error saving group", http.StatusInternalServerError)
 			return
 		}
 
@@ -139,7 +230,8 @@ func CreateGrupoHandler(db *sql.DB) http.HandlerFunc {
 	}
 }
 
-// UpdateGrupoHandler handles updating an existing group.
+// UpdateGrupoHandler handles updating an existing group, potentially replacing the file.
+// Expects multipart/form-data
 func UpdateGrupoHandler(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		vars := mux.Vars(r)
@@ -150,24 +242,88 @@ func UpdateGrupoHandler(db *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		var g models.Grupo
-		if err := json.NewDecoder(r.Body).Decode(&g); err != nil {
-			http.Error(w, "Invalid request body", http.StatusBadRequest)
+		existingGrupo, err := repository.GetGrupoByID(db, id)
+		if err != nil {
+			log.Printf("Error getting group by ID for update: %v", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+		if existingGrupo == nil {
+			http.Error(w, "Grupo not found for update", http.StatusNotFound)
 			return
 		}
 
-		// Ensure the ID in the body matches the ID in the URL
-		g.ID = id
-
-		if err := repository.UpdateGrupo(db, &g); err != nil {
-			log.Printf("Error updating group: %v", err)
-			http.Error(w, "Internal server error", http.StatusInternalServerError)
+		newFilePath, err := saveUploadedFile(r, "archivo")
+		if err != nil {
+			log.Printf("Error saving uploaded file during group update: %v", err)
+			if strings.Contains(err.Error(), "parsing multipart form") || strings.Contains(err.Error(), "request body too large") {
+				http.Error(w, fmt.Sprintf("Error processing form: %v", err), http.StatusBadRequest)
+			} else {
+				http.Error(w, "Internal server error processing file upload", http.StatusInternalServerError)
+			}
 			return
+		}
+
+		var updatedGrupo models.Grupo
+		updatedGrupo.ID = id
+		updatedGrupo.Nombre = r.FormValue("nombre")
+		updatedGrupo.NumeroResolucion = r.FormValue("numeroResolucion")
+		updatedGrupo.LineaInvestigacion = r.FormValue("lineaInvestigacion")
+		updatedGrupo.TipoInvestigacion = r.FormValue("tipoInvestigacion")
+
+		fechaStr := r.FormValue("fechaRegistro")
+		if fechaStr != "" {
+			parsedDate, err := time.Parse(timeFormat, fechaStr)
+			if err != nil {
+				_ = removeFile(newFilePath)
+				http.Error(w, fmt.Sprintf("Invalid format for fechaRegistro. Use %s", timeFormat), http.StatusBadRequest)
+				return
+			}
+			updatedGrupo.FechaRegistro = parsedDate
+		} else {
+			updatedGrupo.FechaRegistro = existingGrupo.FechaRegistro
+		}
+
+		if updatedGrupo.Nombre == "" {
+			updatedGrupo.Nombre = existingGrupo.Nombre
+		}
+		if updatedGrupo.NumeroResolucion == "" {
+			updatedGrupo.NumeroResolucion = existingGrupo.NumeroResolucion
+		}
+		if updatedGrupo.LineaInvestigacion == "" {
+			updatedGrupo.LineaInvestigacion = existingGrupo.LineaInvestigacion
+		}
+		if updatedGrupo.TipoInvestigacion == "" {
+			updatedGrupo.TipoInvestigacion = existingGrupo.TipoInvestigacion
+		}
+
+		var oldFilePathToDelete *string = nil
+		if newFilePath != nil {
+			updatedGrupo.Archivo = newFilePath
+			if existingGrupo.Archivo != nil && *existingGrupo.Archivo != "" && *existingGrupo.Archivo != *newFilePath {
+				oldFilePathToDelete = existingGrupo.Archivo
+			}
+		} else {
+			updatedGrupo.Archivo = existingGrupo.Archivo
+		}
+
+		if err := repository.UpdateGrupo(db, &updatedGrupo); err != nil {
+			log.Printf("Error updating group in repository: %v", err)
+			_ = removeFile(newFilePath)
+			http.Error(w, "Internal server error updating group", http.StatusInternalServerError)
+			return
+		}
+
+		if oldFilePathToDelete != nil {
+			err := removeFile(oldFilePathToDelete)
+			if err != nil {
+				log.Printf("Warning: Error deleting old file '%s' after group update: %v", *oldFilePathToDelete, err)
+			}
 		}
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(g)
+		json.NewEncoder(w).Encode(updatedGrupo)
 	}
 }
 
@@ -203,23 +359,19 @@ func GetGrupoDetailsHandler(db *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		// Use the repository function that returns the combined struct
 		grupoWithInvestigadores, err := repository.GetGrupoDetails(db, id)
 		if err != nil {
-			// Log the specific error from the repository
 			log.Printf("Error getting group details from repository: %v", err)
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
 			return
 		}
 
-		// Check if the group was found (repository returns nil, nil if not found)
 		if grupoWithInvestigadores == nil {
 			http.Error(w, "Grupo not found", http.StatusNotFound)
 			return
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		// Encode the combined struct directly
 		json.NewEncoder(w).Encode(grupoWithInvestigadores)
 	}
 }
@@ -336,5 +488,43 @@ func GetGruposByInvestigadorHandler(db *sql.DB) http.HandlerFunc {
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(respuesta)
+	}
+}
+
+// GetAllGruposWithDetailsHandler retrieves all groups with their associated investigators and roles, paginated.
+func GetAllGruposWithDetailsHandler(db *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		// Read pagination params
+		page, limit := utils.GetPaginationParams(r)
+		offset := (page - 1) * limit
+
+		// Call the repository function to get all groups with details
+		gruposConDetalles, totalItems, err := repository.GetAllGruposWithDetails(db, limit, offset)
+		if err != nil {
+			log.Printf("Error getting all groups with details: %v", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		// Calculate pagination metadata
+		totalPages := 0
+		if totalItems > 0 {
+			totalPages = int(math.Ceil(float64(totalItems) / float64(limit)))
+		}
+		pagination := models.PaginationMetadata{
+			TotalItems:  totalItems,
+			TotalPages:  totalPages,
+			CurrentPage: page,
+			Limit:       limit,
+		}
+
+		// Create paginated response
+		response := models.PaginatedResponse{
+			Data:       gruposConDetalles, // Data is []GrupoWithInvestigadores
+			Pagination: pagination,
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(response)
 	}
 }

@@ -131,3 +131,27 @@ func SearchInvestigadores(db *sql.DB, name string, limit, offset int) ([]models.
 
 	return investigadores, total, nil
 }
+
+// GetAllInvestigadoresNoPagination retrieves ALL investigators without pagination.
+func GetAllInvestigadoresNoPagination(db *sql.DB) ([]models.Investigador, error) {
+	query := `SELECT idInvestigador, nombre, apellido, createdAt, updatedAt FROM investigador ORDER BY nombre, apellido`
+	rows, err := db.Query(query)
+	if err != nil {
+		return nil, fmt.Errorf("error querying all investigators: %w", err)
+	}
+	defer rows.Close()
+
+	investigadores := []models.Investigador{}
+	for rows.Next() {
+		var inv models.Investigador
+		if err := rows.Scan(&inv.ID, &inv.Nombre, &inv.Apellido, &inv.CreatedAt, &inv.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("error scanning investigator row (no pagination): %w", err)
+		}
+		investigadores = append(investigadores, inv)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error after iterating through all investigator rows: %w", err)
+	}
+
+	return investigadores, nil
+}

@@ -170,3 +170,23 @@ func DeleteInvestigadorHandler(db *sql.DB) http.HandlerFunc {
 		w.WriteHeader(http.StatusNoContent)
 	}
 }
+
+// GetAllInvestigadoresNoPaginationHandler handles fetching ALL investigators without pagination.
+func GetAllInvestigadoresNoPaginationHandler(db *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		investigadores, err := repository.GetAllInvestigadoresNoPagination(db)
+		if err != nil {
+			log.Printf("Error getting all investigators (no pagination): %v", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		// Create a map to structure the response as {"data": [...investigators]}
+		response := map[string]interface{}{
+			"data": investigadores,
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(response) // Encode the map
+	}
+}

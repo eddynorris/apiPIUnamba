@@ -3,6 +3,7 @@ package repository
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 
 	// Import math for ceiling calculation
 	"github.com/GoogleCloudPlatform/golang-samples/run/helloworld/models"
@@ -86,21 +87,19 @@ func SearchGrupos(db *sql.DB, groupName, investigatorName, year, lineaInvestigac
 	args := []interface{}{}
 	placeholderCount := 1
 
-	// --- Build WHERE clause dynamically (for the CTE) ---
+	// --- Build WHERE clause dynamically (for the initial filtering CTE) ---
 	whereConditions := ""
 
 	if groupName != "" {
-		// Apply unaccent to both column and search term
 		whereConditions += fmt.Sprintf(` AND unaccent(g.nombre) ILIKE unaccent($%d)`, placeholderCount)
 		args = append(args, "%"+groupName+"%")
 		placeholderCount++
 	}
 
 	if investigatorName != "" {
-		// Apply unaccent to both column and search term
-		whereConditions += fmt.Sprintf(` AND (unaccent(i.nombre) ILIKE unaccent($%d) OR unaccent(i.apellido) ILIKE unaccent($%d))`, placeholderCount, placeholderCount+1)
-		args = append(args, "%"+investigatorName+"%", "%"+investigatorName+"%")
-		placeholderCount += 2
+		whereConditions += fmt.Sprintf(` AND unaccent(i.nombre || ' ' || i.apellido) ILIKE unaccent($%d)`, placeholderCount)
+		args = append(args, "%"+investigatorName+"%")
+		placeholderCount++
 	}
 
 	if year != "" {
@@ -110,22 +109,21 @@ func SearchGrupos(db *sql.DB, groupName, investigatorName, year, lineaInvestigac
 	}
 
 	if lineaInvestigacion != "" {
-		// Apply unaccent to both column and search term
 		whereConditions += fmt.Sprintf(` AND unaccent(g.lineaInvestigacion) ILIKE unaccent($%d)`, placeholderCount)
 		args = append(args, "%"+lineaInvestigacion+"%")
 		placeholderCount++
 	}
 
 	if tipoInvestigacion != "" {
-		// Apply unaccent to both column and search term
 		whereConditions += fmt.Sprintf(` AND unaccent(g.tipoInvestigacion) ILIKE unaccent($%d)`, placeholderCount)
 		args = append(args, "%"+tipoInvestigacion+"%")
 		placeholderCount++
 	}
 	// --- End WHERE clause build ---
 
-	// CTE to find matching group IDs based on filters
-	cteQuery := `WITH FilteredGroups AS (
+	// CTE 1: Find all unique group IDs matching the filters
+	cteFilteredGroups := `
+	WITH FilteredGroups AS (
 		SELECT DISTINCT g.idGrupo
 		FROM grupo g
 		LEFT JOIN Grupo_Investigador dgi ON g.idGrupo = dgi.idGrupo
@@ -133,56 +131,73 @@ func SearchGrupos(db *sql.DB, groupName, investigatorName, year, lineaInvestigac
 		WHERE 1=1` + whereConditions + `
 	)`
 
-	// Query for the data page using the CTE
-	dataQuery := cteQuery + fmt.Sprintf(`
+	// --- Query for the total count using the first CTE ---
+	var totalItems int
+	countQuery := cteFilteredGroups + ` SELECT COUNT(*) FROM FilteredGroups`
+	if err := db.QueryRow(countQuery, args...).Scan(&totalItems); err != nil { // Use original args for count
+		return nil, 0, fmt.Errorf("error searching total group count: %w", err)
+	}
+
+	// If no items found, return early
+	if totalItems == 0 {
+		return []models.GrupoWithInvestigadores{}, 0, nil
+	}
+
+	// --- Build the final query to get paginated details ---
+
+	// CTE 2: Paginate the filtered group IDs
+	ctePaginatedIDs := fmt.Sprintf(`,
+	PaginatedGroupIDs AS (
+		SELECT idGrupo
+		FROM FilteredGroups
+		ORDER BY idGrupo -- Or another relevant field like g.nombre from the join if needed
+		LIMIT $%d OFFSET $%d
+	)`, placeholderCount, placeholderCount+1)
+
+	// Main query to get details for the paginated group IDs
+	dataQuery := cteFilteredGroups + ctePaginatedIDs + `
 	SELECT
 		g.idGrupo, g.nombre, g.numeroResolucion, g.lineaInvestigacion, g.tipoInvestigacion, g.fechaRegistro, g.archivo, g.createdAt, g.updatedAt,
-		i.idInvestigador, i.nombre, i.apellido, i.createdAt as invCreatedAt, i.updatedAt as invUpdatedAt,
+		i.idInvestigador, i.nombre as invNombre, i.apellido as invApellido, i.createdAt as invCreatedAt, i.updatedAt as invUpdatedAt,
 		dgi.rol
 	FROM grupo g
-	JOIN Grupo_Investigador dgi ON g.idGrupo = dgi.idGrupo
-	JOIN investigador i ON dgi.idInvestigador = i.idInvestigador
-	WHERE g.idGrupo IN (SELECT idGrupo FROM FilteredGroups)
-	ORDER BY g.idGrupo, i.idInvestigador
-	LIMIT $%d OFFSET $%d`, placeholderCount, placeholderCount+1)
+	LEFT JOIN Grupo_Investigador dgi ON g.idGrupo = dgi.idGrupo
+	LEFT JOIN investigador i ON dgi.idInvestigador = i.idInvestigador
+	WHERE g.idGrupo IN (SELECT idGrupo FROM PaginatedGroupIDs)
+	ORDER BY g.idGrupo, i.idInvestigador -- Ensure consistent order for grouping`
 
+	// Append limit and offset to the original args
 	finalArgs := append(args, limit, offset)
 	rows, err := db.Query(dataQuery, finalArgs...)
 	if err != nil {
-		return nil, 0, fmt.Errorf("error searching groups page with details: %w", err)
+		return nil, 0, fmt.Errorf("error searching groups page with details: %w, Query: %s, Args: %v", err, dataQuery, finalArgs)
 	}
 	defer rows.Close()
 
-	// Map to group investigators by group ID
+	// --- Process rows and group investigators ---
 	grupoMap := make(map[int]*models.GrupoWithInvestigadores)
-	// Slice to maintain order of groups found
+	// Slice to maintain order based on PaginatedGroupIDs query order
 	orderedGrupos := []*models.GrupoWithInvestigadores{}
 
 	for rows.Next() {
 		var g models.Grupo
-		var inv models.InvestigadorConRol           // Use the struct with role
-		var invCreatedAt, invUpdatedAt sql.NullTime // Use sql.NullTime for potentially null timestamps from joins
+		var invID sql.NullInt64 // Use Null types for LEFT JOIN results
+		var invNombre, invApellido, invRol sql.NullString
+		var invCreatedAt, invUpdatedAt sql.NullTime
 
 		if err := rows.Scan(
 			&g.ID, &g.Nombre, &g.NumeroResolucion, &g.LineaInvestigacion, &g.TipoInvestigacion, &g.FechaRegistro, &g.Archivo, &g.CreatedAt, &g.UpdatedAt,
-			&inv.ID, &inv.Nombre, &inv.Apellido, &invCreatedAt, &invUpdatedAt,
-			&inv.Rol,
+			&invID, &invNombre, &invApellido, &invCreatedAt, &invUpdatedAt,
+			&invRol,
 		); err != nil {
 			return nil, 0, fmt.Errorf("error scanning group/investigator row during search: %w", err)
 		}
 
-		// Handle potentially null timestamps for investigator
-		if invCreatedAt.Valid {
-			inv.CreatedAt = invCreatedAt.Time
-		}
-		if invUpdatedAt.Valid {
-			inv.UpdatedAt = invUpdatedAt.Time
-		}
-
 		// Check if we've already seen this group
-		if _, exists := grupoMap[g.ID]; !exists {
-			// First time seeing this group
-			grupoWithDetails := &models.GrupoWithInvestigadores{
+		grupoWithDetails, exists := grupoMap[g.ID]
+		if !exists {
+			// First time seeing this group (within the paginated set)
+			grupoWithDetails = &models.GrupoWithInvestigadores{
 				Grupo:          g,
 				Investigadores: []models.InvestigadorConRol{}, // Initialize empty slice
 			}
@@ -190,19 +205,27 @@ func SearchGrupos(db *sql.DB, groupName, investigatorName, year, lineaInvestigac
 			orderedGrupos = append(orderedGrupos, grupoWithDetails) // Add to ordered list
 		}
 
-		// Add the current investigator (with role) to this group's list
-		grupoMap[g.ID].Investigadores = append(grupoMap[g.ID].Investigadores, inv)
+		// If an investigator was joined (not a group without investigators matched by filter)
+		if invID.Valid {
+			inv := models.InvestigadorConRol{
+				ID:       int(invID.Int64),
+				Nombre:   invNombre.String,
+				Apellido: invApellido.String,
+				Rol:      invRol.String,
+			}
+			if invCreatedAt.Valid {
+				inv.CreatedAt = invCreatedAt.Time
+			}
+			if invUpdatedAt.Valid {
+				inv.UpdatedAt = invUpdatedAt.Time
+			}
+			// Append investigator only if valid
+			grupoMap[g.ID].Investigadores = append(grupoMap[g.ID].Investigadores, inv)
+		}
 	}
 
 	if err := rows.Err(); err != nil {
 		return nil, 0, fmt.Errorf("error after iterating through group search rows: %w", err)
-	}
-
-	// Query for the total count using the CTE
-	var total int
-	countQuery := cteQuery + ` SELECT COUNT(*) FROM FilteredGroups`
-	if err := db.QueryRow(countQuery, args...).Scan(&total); err != nil { // Use original args for count
-		return nil, 0, fmt.Errorf("error searching total group count: %w", err)
 	}
 
 	// Convert []*models.GrupoWithInvestigadores to []models.GrupoWithInvestigadores
@@ -211,7 +234,7 @@ func SearchGrupos(db *sql.DB, groupName, investigatorName, year, lineaInvestigac
 		result[i] = *ptr
 	}
 
-	return result, total, nil
+	return result, totalItems, nil
 }
 
 // GetGrupoDetails retrieves a group and its associated investigators including their roles.
@@ -322,4 +345,141 @@ func GetGruposByInvestigadorID(db *sql.DB, idInvestigador int) ([]map[string]int
 		return nil, fmt.Errorf("error después de iterar los grupos: %w", err)
 	}
 	return gruposConIntegrantes, nil
+}
+
+// GetAllGruposWithDetails retrieves a paginated list of all groups with their associated investigators and roles.
+func GetAllGruposWithDetails(db *sql.DB, limit, offset int) ([]models.GrupoWithInvestigadores, int, error) {
+	// 1. Get the total count of groups
+	var totalItems int
+	countQuery := `SELECT COUNT(*) FROM grupo`
+	if err := db.QueryRow(countQuery).Scan(&totalItems); err != nil {
+		return nil, 0, fmt.Errorf("error querying total group count for get all with details: %w", err)
+	}
+
+	// If no groups, return early
+	if totalItems == 0 {
+		return []models.GrupoWithInvestigadores{}, 0, nil
+	}
+
+	// 2. Get the IDs of the groups for the current page
+	paginatedIDsQuery := `SELECT idGrupo FROM grupo ORDER BY nombre, idGrupo LIMIT $1 OFFSET $2`
+	rowsIDs, err := db.Query(paginatedIDsQuery, limit, offset)
+	if err != nil {
+		return nil, 0, fmt.Errorf("error querying paginated group IDs: %w", err)
+	}
+	defer rowsIDs.Close()
+
+	var groupIDs []interface{} // Use interface{} for IN clause argument
+	var groupIDOrder []int     // Maintain the order for final result sorting
+	for rowsIDs.Next() {
+		var id int
+		if err := rowsIDs.Scan(&id); err != nil {
+			return nil, 0, fmt.Errorf("error scanning group ID: %w", err)
+		}
+		groupIDs = append(groupIDs, id)
+		groupIDOrder = append(groupIDOrder, id)
+	}
+	if err := rowsIDs.Err(); err != nil {
+		return nil, 0, fmt.Errorf("error after iterating group IDs: %w", err)
+	}
+
+	// If no IDs found for this page (shouldn't happen if totalItems > 0 and offset is valid, but check anyway)
+	if len(groupIDs) == 0 {
+		return []models.GrupoWithInvestigadores{}, totalItems, nil
+	}
+
+	// 3. Get details for the selected group IDs using LEFT JOINs
+	// Build the placeholder string for the IN clause ($1, $2, $3...)
+	placeholders := make([]string, len(groupIDs))
+	for i := range placeholders {
+		placeholders[i] = fmt.Sprintf("$%d", i+1)
+	}
+	placeholderString := fmt.Sprintf("(%s)", strings.Join(placeholders, ", ")) // Generates ($1, $2, ...)
+
+	detailsQuery := `
+	SELECT
+		g.idGrupo, g.nombre, g.numeroResolucion, g.lineaInvestigacion, g.tipoInvestigacion, g.fechaRegistro, g.archivo, g.createdAt, g.updatedAt,
+		i.idInvestigador, i.nombre as invNombre, i.apellido as invApellido, i.createdAt as invCreatedAt, i.updatedAt as invUpdatedAt,
+		dgi.rol
+	FROM grupo g
+	LEFT JOIN Grupo_Investigador dgi ON g.idGrupo = dgi.idGrupo
+	LEFT JOIN investigador i ON dgi.idInvestigador = i.idInvestigador
+	WHERE g.idGrupo IN ` + placeholderString + `
+	ORDER BY g.nombre, g.idGrupo, invApellido, invNombre -- Consistent ordering is important for grouping` // Order matching the ID query helps, but Go map iteration isn't ordered
+
+	rowsDetails, err := db.Query(detailsQuery, groupIDs...) // Pass IDs as variadic arguments
+	if err != nil {
+		return nil, 0, fmt.Errorf("error querying group details for selected IDs: %w, Query: %s, Args: %v", err, detailsQuery, groupIDs)
+	}
+	defer rowsDetails.Close()
+
+	// 4. Group results in Go
+	grupoMap := make(map[int]*models.GrupoWithInvestigadores)
+
+	for rowsDetails.Next() {
+		var g models.Grupo
+		var invID sql.NullInt64
+		var invNombre, invApellido, invRol sql.NullString
+		var invCreatedAt, invUpdatedAt sql.NullTime
+
+		if err := rowsDetails.Scan(
+			&g.ID, &g.Nombre, &g.NumeroResolucion, &g.LineaInvestigacion, &g.TipoInvestigacion, &g.FechaRegistro, &g.Archivo, &g.CreatedAt, &g.UpdatedAt,
+			&invID, &invNombre, &invApellido, &invCreatedAt, &invUpdatedAt,
+			&invRol,
+		); err != nil {
+			return nil, 0, fmt.Errorf("error scanning group/investigator row during get all with details: %w", err)
+		}
+
+		// Check if we've already seen this group
+		grupoWithDetails, exists := grupoMap[g.ID]
+		if !exists {
+			grupoWithDetails = &models.GrupoWithInvestigadores{
+				Grupo:          g,
+				Investigadores: []models.InvestigadorConRol{},
+			}
+			grupoMap[g.ID] = grupoWithDetails
+		}
+
+		// If an investigator was joined, add them
+		if invID.Valid {
+			inv := models.InvestigadorConRol{
+				ID:       int(invID.Int64),
+				Nombre:   invNombre.String,
+				Apellido: invApellido.String,
+				Rol:      invRol.String,
+			}
+			if invCreatedAt.Valid {
+				inv.CreatedAt = invCreatedAt.Time
+			}
+			if invUpdatedAt.Valid {
+				inv.UpdatedAt = invUpdatedAt.Time
+			}
+			// Avoid adding duplicates if the DB somehow returns multiple identical rows (shouldn't happen with proper schema)
+			found := false
+			for _, existingInv := range grupoWithDetails.Investigadores {
+				if existingInv.ID == inv.ID {
+					found = true
+					break
+				}
+			}
+			if !found {
+				grupoWithDetails.Investigadores = append(grupoWithDetails.Investigadores, inv)
+			}
+		}
+	}
+
+	if err := rowsDetails.Err(); err != nil {
+		return nil, 0, fmt.Errorf("error after iterating through get all groups with details rows: %w", err)
+	}
+
+	// 5. Build the final result slice, respecting the paginated order
+	result := make([]models.GrupoWithInvestigadores, 0, len(groupIDOrder))
+	for _, id := range groupIDOrder {
+		if grupoData, ok := grupoMap[id]; ok {
+			result = append(result, *grupoData)
+		}
+		// If a group ID was selected but somehow not found in the details query (shouldn't happen), it's skipped.
+	}
+
+	return result, totalItems, nil
 }

@@ -1,15 +1,12 @@
--- Table: usuario (Application Users linked to Supabase Auth)
-CREATE TABLE usuario (
-    id_usuario SERIAL PRIMARY KEY,
-    -- Guarda el ID del usuario de Supabase Auth (que es un UUID)
-    -- Es la clave para vincular tu tabla con la autenticación externa.
-    supabase_user_id UUID UNIQUE NOT NULL,
-    email VARCHAR(150) UNIQUE, -- Puede ser útil tenerlo, aunque Supabase lo maneja. UNIQUE es bueno.
-    -- Aquí puedes añadir otros campos específicos de tu aplicación para el usuario si los necesitas
-    -- Ejemplo: nombre, apellido, rol_aplicacion, etc.
-    -- rol_aplicacion VARCHAR(50) DEFAULT 'miembro' NOT NULL, -- Ejemplo
-    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP, -- Usar TIMESTAMP WITH TIME ZONE
-    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP  -- Usar TIMESTAMP WITH TIME ZONE
+-- Table: usuario (Application Users)
+CREATE TABLE Usuario (
+    idUsuario SERIAL PRIMARY KEY,            -- Changed from id_usuario
+    -- Removed supabase_user_id UUID UNIQUE NOT NULL,
+    email VARCHAR(150) UNIQUE NOT NULL,
+    password TEXT NOT NULL,                   -- Added password field (will store hash)
+    -- Removed rol_aplicacion
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP, 
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
 
 -- Table: Investigador (Researchers)
@@ -50,14 +47,14 @@ CREATE TABLE Grupo_Investigador (
 CREATE OR REPLACE FUNCTION actualizar_updatedat()
 RETURNS TRIGGER AS $$
 BEGIN
-    NEW.updatedat = CURRENT_TIMESTAMP;
+    NEW.updated_at = CURRENT_TIMESTAMP; -- Corrected column name
     RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
 
 -- Triggers para cada tabla que necesita updatedAt
 
--- Usuario
+-- Usuario (Updated trigger to use new table name and function)
 CREATE TRIGGER trigger_updatedat_usuario
 BEFORE UPDATE ON Usuario
 FOR EACH ROW
@@ -80,3 +77,5 @@ CREATE TRIGGER trigger_updatedat_grupo_investigador
 BEFORE UPDATE ON grupo_investigador
 FOR EACH ROW
 EXECUTE FUNCTION actualizar_updatedat();
+
+CREATE EXTENSION IF NOT EXISTS unaccent;
